@@ -54,7 +54,7 @@ Done.
 The bridge is two independent layers:
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="Architecture" width="100%"/>
+  <img src="assets/architecture.png" alt="Architecture" width="100%"/>
 </p>
 
 - **VirtuosoClient** — pure TCP SKILL client. Sends SKILL, gets results. No SSH awareness.
