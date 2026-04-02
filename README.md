@@ -5,7 +5,11 @@
 [![GitHub stars](https://img.shields.io/github/stars/Arcadia-1/virtuoso-bridge-lite?style=social)](https://github.com/Arcadia-1/virtuoso-bridge-lite)
 [![AI Native](https://img.shields.io/badge/AI%20Native-agent--driven%20development-blueviolet)](https://claude.ai/code)
 
-### Distilled from a fully verified production harness. AI-native. High-speed SSH bridge. Virtuoso operation & simulation.
+### Distilled from a fully verified production harness. 
+### High-speed SSH bridge. 
+### Virtuoso operation & simulation.
+### AI-native. 
+
 
 Use a coding agent (Claude Code, Cursor, etc.) to read this repo and tailor it to your project — PDK, libraries, tech node, directory structure. You describe intent; the agent writes SKILL, builds layouts, runs simulations.
 
