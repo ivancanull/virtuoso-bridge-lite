@@ -16,8 +16,8 @@ Control a remote Cadence Virtuoso from any machine over SSH. No VNC, no X11, no 
 
 ### Why use this?
 
-- **Remote-first** — SSH tunnel handles all communication. Your code runs locally; SKILL executes on the server.
-- **Persistent SSH** — one long-lived connection with automatic reconnection. No repeated `ssh` logins, no dropped sessions.
+- **Remote-first** — SSH tunnel handles all communication. Your code runs locally (tested from mac, windows, linux); SKILL executes on the server.
+- **Persistent SSH** — one long-lived connection with automatic reconnection. No repeated `ssh` logins, no dropped sessions, fast operations for agent tool calling.
 - **Jump host support** — works through bastion hosts out of the box (`VB_JUMP_HOST`).
 - **AI Native** — designed for AI agents to drive. Describe what you want; the agent generates SKILL, builds layouts, runs simulations.
 
@@ -27,7 +27,7 @@ Control a remote Cadence Virtuoso from any machine over SSH. No VNC, no X11, no 
 2. **Layout & Schematic editing** — Python API for creating/modifying cellviews
 3. **Spectre simulation** — run simulations remotely, parse results automatically
 
-> Distilled from [virtuoso-bridge (full)](https://github.com/Arcadia-1/virtuoso-bridge) — a fully verified end-to-end environment harness covering SKILL execution, Spectre simulation, OCEAN analysis, and Calibre DRC/LVS/PEX, tested in production TSMC 28nm tape-out workflows. This lite version extracts the core and removes all site-specific paths and credentials. Compared to the full version:
+> Distilled from a fully verified end-to-end environment harness covering SKILL execution, Spectre simulation, OCEAN analysis, and Calibre DRC/LVS/PEX, tested in production TSMC 28nm tape-out workflows. This lite version extracts the core and removes all site-specific paths and credentials. Compared to the full version:
 >
 > - **Removed** Calibre DRC/LVS/PEX wrappers and all associated CSH scripts
 > - **Removed** OCEAN script integration
