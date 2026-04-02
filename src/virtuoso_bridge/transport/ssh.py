@@ -18,6 +18,28 @@ from pathlib import Path
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+# ── Command log file ─────────────────────────────────────────────────────
+# All SSH/SCP/tunnel commands across all modules are logged to this file.
+_LOG_DIR = Path.home() / ".cache" / "virtuoso_bridge"
+_LOG_FILE = _LOG_DIR / "commands.log"
+
+def _setup_command_log() -> None:
+    """Add a file handler to the package root logger."""
+    pkg_logger = logging.getLogger("virtuoso_bridge")
+    if any(getattr(h, '_vb_cmd_log', False) for h in pkg_logger.handlers):
+        return
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+    fh._vb_cmd_log = True  # type: ignore[attr-defined]
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    pkg_logger.addHandler(fh)
+    if pkg_logger.level == logging.NOTSET or pkg_logger.level > logging.DEBUG:
+        pkg_logger.setLevel(logging.DEBUG)
+
+_setup_command_log()
+
 _INTERPRETER_SHUTTING_DOWN = False
 
 def _mark_interpreter_shutdown() -> None:
@@ -156,6 +178,7 @@ class SSHRunner:
         return self._run_command_once(command, timeout=timeout)
 
     def _print_cmd(self, cmd: list[str]) -> None:
+        logger.debug("[cmd] %s", " ".join(cmd))
         if self._verbose:
             print(f"[cmd] {' '.join(cmd)}", flush=True)
 
