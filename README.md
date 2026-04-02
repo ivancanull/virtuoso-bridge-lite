@@ -5,13 +5,11 @@
 [![GitHub stars](https://img.shields.io/github/stars/Arcadia-1/virtuoso-bridge-lite?style=social)](https://github.com/Arcadia-1/virtuoso-bridge-lite)
 [![AI Native](https://img.shields.io/badge/AI%20Native-agent--driven%20development-blueviolet)](https://claude.ai/code)
 
-### You describe intent. The agent writes SKILL, builds layouts, and runs simulations.
+### Distilled from a fully verified production harness. AI-native. High-speed SSH bridge. Virtuoso operation & simulation.
 
-**Strongly recommended:** use a coding agent (Claude Code, Cursor, etc.) to read this repo and tailor it to your actual project environment — PDK, libraries, tech node, and directory structure.
+Use a coding agent (Claude Code, Cursor, etc.) to read this repo and tailor it to your project — PDK, libraries, tech node, directory structure. You describe intent; the agent writes SKILL, builds layouts, runs simulations.
 
-Lightweight Python bridge for Cadence Virtuoso — **work from anywhere, on any machine**.
-
-Virtuoso runs on a remote Linux server. This bridge lets you control it from your laptop (macOS, Windows, Linux) over SSH. No VNC, no X11 forwarding, no manual terminal sessions.
+Control a remote Cadence Virtuoso from any machine over SSH. No VNC, no X11, no manual terminal sessions.
 
 ### Why use this?
 
