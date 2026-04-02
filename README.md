@@ -1,5 +1,12 @@
 # virtuoso-bridge
 
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/Arcadia-1/virtuoso-bridge-lite?style=social)](https://github.com/Arcadia-1/virtuoso-bridge-lite)
+[![AI Native](https://img.shields.io/badge/AI%20Native-agent--driven%20development-blueviolet)](https://claude.ai/code)
+
+> **AI Native** — This codebase is designed to be read, modified, and operated entirely by AI agents (Claude Code, Cursor, etc.). Human developers configure `.env` and describe intent in natural language; the agent handles all code changes, SKILL generation, simulation setup, and layout construction. You should not need to edit source files manually.
+
 Lightweight Python bridge for Cadence Virtuoso. Three capabilities:
 
 1. **SKILL execution** — send SKILL commands to a running Virtuoso, get results back
