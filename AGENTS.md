@@ -15,10 +15,18 @@ When a user first opens this project, run these checks **before anything else**:
 
 ### Remote mode
 
+**Three-host model** (common in EDA environments):
+```
+Your machine  ──SSH──►  Jump host (bastion)  ──SSH──►  Compute host (Virtuoso)
+              VB_JUMP_HOST                   VB_REMOTE_HOST
+```
+`VB_REMOTE_HOST` must be the machine running Virtuoso, **not** the jump host. This is the most common misconfiguration.
+
 1. **Check `.env`** — does it exist and have `VB_REMOTE_HOST` set?
    - If not: `pip install -e .` then `virtuoso-bridge init`, ask the user to fill in their SSH host.
+   - Verify: `VB_REMOTE_HOST` = compute host (where Virtuoso runs), `VB_JUMP_HOST` = bastion (if any).
 
-2. **Check SSH** — `ssh <VB_REMOTE_HOST> echo ok`
+2. **Check SSH** — `ssh <VB_REMOTE_HOST> echo ok` (or via jump host if configured)
    - If this fails: tell the user to fix SSH first. The bridge assumes `ssh <host>` already works.
 
 3. **Check Virtuoso** — `ssh <VB_REMOTE_HOST> "pgrep -f virtuoso"`

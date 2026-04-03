@@ -92,7 +92,7 @@ def _ssh_precheck() -> int | None:
 
     if ssh_env.jump_host:
         user = ssh_env.jump_user or ssh_env.remote_user
-        runner = SSHRunner(host=ssh_env.jump_host, user=user, connect_timeout=2, persistent_shell=False)
+        runner = SSHRunner(host=ssh_env.jump_host, user=user, connect_timeout=5, persistent_shell=False)
         if not runner.test_connection(timeout=2):
             print(f"SSH to jump host {ssh_env.jump_host} failed. Fix SSH first.")
             return 1
@@ -102,7 +102,7 @@ def _ssh_precheck() -> int | None:
         runner = SSHRunner(
             host=ssh_env.remote_host, user=ssh_env.remote_user,
             jump_host=ssh_env.jump_host, jump_user=jump_user,
-            connect_timeout=2, persistent_shell=False,
+            connect_timeout=5, persistent_shell=False,
         )
         if not runner.test_connection(timeout=2):
             print(f"SSH to {ssh_env.remote_host} failed. Fix SSH first.")
@@ -194,6 +194,14 @@ def _print_status() -> int:
             vc = VirtuosoClient(host="127.0.0.1", port=port, timeout=5)
             ok = vc.test_connection(timeout=5)
             print(f"[daemon] {'OK' if ok else 'NO RESPONSE'}")
+            if ok:
+                # Hostname verification: check remote hostname matches VB_REMOTE_HOST
+                hostname_result = vc.execute_skill('getHostName()', timeout=5)
+                remote_hostname = (hostname_result.output or "").strip().strip('"')
+                configured_host = os.getenv("VB_REMOTE_HOST", "").strip()
+                if remote_hostname and configured_host and remote_hostname != configured_host:
+                    print(f"[warning] remote hostname is '{remote_hostname}' but VB_REMOTE_HOST is '{configured_host}'")
+                    print(f"  Make sure VB_REMOTE_HOST points to the machine running Virtuoso, not the jump host.")
             if not ok and setup_path:
                 print(f"\n  Please execute in Virtuoso CIW: load(\"{setup_path}\")")
         except Exception as e:

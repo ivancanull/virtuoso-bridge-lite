@@ -119,6 +119,17 @@ Done.
 1. **SSH**: `ssh my-server` must work in your terminal without a password prompt.
 2. **Virtuoso**: a Virtuoso process must be running on the remote (or local) machine.
 
+### Jump host setup
+
+If you access Virtuoso through a bastion/jump host, set both hosts in `.env`:
+
+```dotenv
+VB_REMOTE_HOST=compute-host   # the machine running Virtuoso (NOT the jump host)
+VB_JUMP_HOST=jump-host        # the bastion you SSH through
+```
+
+Common mistake: setting `VB_REMOTE_HOST` to the jump host. `VB_REMOTE_HOST` must be the machine where Virtuoso is actually running. Verify with `virtuoso-bridge status` — it checks the remote hostname matches.
+
 ## Architecture
 
 <p align="center">
