@@ -317,46 +317,86 @@ class SSHClient:
         print(f"[cmd] {' '.join(cmd)}", flush=True)
 
         # Platform-specific detach: tunnel must survive parent process exit
-        popen_kwargs: dict[str, Any] = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-        }
         if os.name == "nt":
-            # Windows: DETACHED_PROCESS + CREATE_NEW_PROCESS_GROUP
-            popen_kwargs["creationflags"] = (
-                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-            )
-            # stderr must NOT be PIPE on Windows — pipe breaks when parent exits
-            popen_kwargs["stderr"] = subprocess.DEVNULL
+            # On Windows, launching ssh.exe directly can still show a console
+            # window, especially when ProxyJump causes ssh to spawn another ssh.
+            # Start it from a hidden PowerShell process instead.
+            pid = self._start_hidden_windows_process(cmd)
+
+            settle = _TUNNEL_STARTUP_SETTLE_SECONDS
+            if self._jump_host:
+                settle = max(settle, 3.0)
+            deadline = time.monotonic() + settle
+            while time.monotonic() < deadline:
+                if self._can_reach_port(port):
+                    self._saved_tunnel_pid = pid
+                    self._using_external_tunnel = True
+                    return None
+                time.sleep(0.1)
+
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            raise RuntimeError("SSH tunnel failed to start on Windows")
         else:
-            popen_kwargs["start_new_session"] = True
-            popen_kwargs["stderr"] = subprocess.PIPE
+            popen_kwargs: dict[str, Any] = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "start_new_session": True,
+                "stderr": subprocess.PIPE,
+            }
+            proc = subprocess.Popen(cmd, **popen_kwargs)
 
-        proc = subprocess.Popen(cmd, **popen_kwargs)
+            # Wait for tunnel to settle (longer for jump-host paths)
+            settle = _TUNNEL_STARTUP_SETTLE_SECONDS
+            if self._jump_host:
+                settle = max(settle, 3.0)
+            deadline = time.monotonic() + settle
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
 
-        # Wait for tunnel to settle (longer for jump-host paths)
-        settle = _TUNNEL_STARTUP_SETTLE_SECONDS
-        if self._jump_host:
-            settle = max(settle, 3.0)
-        deadline = time.monotonic() + settle
-        while time.monotonic() < deadline:
             if proc.poll() is not None:
-                break
-            time.sleep(0.1)
+                err_msg = ""
+                if proc.stderr and proc.stderr.readable():
+                    try:
+                        err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
+                    except (OSError, ValueError):
+                        pass
+                if "address already in use" in err_msg.lower() and self._can_reach_port(port):
+                    logger.info("Reusing existing tunnel at localhost:%d", port)
+                    self._using_external_tunnel = True
+                    return None
+                return proc  # failed
+            return proc  # running
 
-        if proc.poll() is not None:
-            err_msg = ""
-            if proc.stderr and proc.stderr.readable():
-                try:
-                    err_msg = proc.stderr.read().decode("utf-8", errors="ignore")
-                except (OSError, ValueError):
-                    pass
-            if "address already in use" in err_msg.lower() and self._can_reach_port(port):
-                logger.info("Reusing existing tunnel at localhost:%d", port)
-                self._using_external_tunnel = True
-                return None
-            return proc  # failed
-        return proc  # running
+    def _start_hidden_windows_process(self, cmd: list[str]) -> int:
+        def _ps_quote(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        file_path = _ps_quote(cmd[0])
+        args = ", ".join(_ps_quote(part) for part in cmd[1:])
+        script = (
+            f"$p = Start-Process -FilePath {file_path} "
+            f"-ArgumentList @({args}) -WindowStyle Hidden -PassThru; "
+            "$p.Id"
+        )
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to launch hidden SSH tunnel: {result.stderr.strip()}")
+        try:
+            return int(result.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError) as exc:
+            raise RuntimeError(
+                f"Failed to parse hidden SSH tunnel PID: {result.stdout.strip()!r}"
+            ) from exc
 
     def _can_reach_port(self, port: int) -> bool:
         """Check if localhost:port accepts TCP connections."""

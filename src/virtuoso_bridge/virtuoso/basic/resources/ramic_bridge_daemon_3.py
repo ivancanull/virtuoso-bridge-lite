@@ -40,6 +40,24 @@ fcntl.fcntl(stdout_fd, fcntl.F_SETFL, stdout_fl & ~os.O_NONBLOCK)
 
 watchdog_timer = None
 
+
+def _safe_sendall(conn, data):
+    try:
+        conn.sendall(data)
+    except OSError:
+        pass
+
+
+def _safe_close_connection(conn):
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        conn.close()
+    except OSError:
+        pass
+
 def watchdog_callback():
     global timeout_flag
     if not timeout_flag:
@@ -140,19 +158,18 @@ def handle_external_connection(conn, addr):
             timeout_flag = True
         watchdog_timer.cancel()
 
-        conn.sendall(returnData)
+        _safe_sendall(conn, returnData)
 
     except json.JSONDecodeError as e:
-        conn.sendall(f"\x15JSONDecodeError: {e}".encode("utf-8"))
+        _safe_sendall(conn, f"\x15JSONDecodeError: {e}".encode("utf-8"))
     except Exception as e:
         traceback.print_exc()
-        conn.sendall(f"\x15{e}".encode("utf-8"))
+        _safe_sendall(conn, f"\x15{e}".encode("utf-8"))
     finally:
         timeout_flag = True
         if watchdog_timer:
             watchdog_timer.cancel()
-        conn.shutdown(socket.SHUT_RDWR)
-        conn.close()
+        _safe_close_connection(conn)
 
 def start_server():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -167,7 +184,11 @@ def start_server():
         s.listen(1)
         while True:
             conn, addr = s.accept()
-            handle_external_connection(conn, addr)
+            try:
+                handle_external_connection(conn, addr)
+            except Exception:
+                traceback.print_exc()
+                _safe_close_connection(conn)
 
 if __name__ == "__main__":
     start_server()

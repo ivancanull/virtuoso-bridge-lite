@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,20 @@ def _mark_interpreter_shutdown() -> None:
     _INTERPRETER_SHUTTING_DOWN = True
 
 atexit.register(_mark_interpreter_shutdown)
+
+
+def _windows_no_window_kwargs() -> dict[str, Any]:
+    """Best-effort hidden console launch on Windows for CLI tools like ssh/scp/tar."""
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+    startupinfo.wShowWindow = 0  # SW_HIDE
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+        "startupinfo": startupinfo,
+    }
 
 class RemoteSshEnv(NamedTuple):
     """SSH settings read from environment variables."""
@@ -150,6 +164,7 @@ class SSHRunner:
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
+                **_windows_no_window_kwargs(),
             )
             success = result.returncode == 0
             if success:
@@ -205,6 +220,7 @@ class SSHRunner:
             capture_output=True,
             text=True,
             timeout=effective_timeout,
+            **_windows_no_window_kwargs(),
         )
         logger.debug(
             "Remote command returned %d (stdout=%d bytes, stderr=%d bytes)",
@@ -260,9 +276,18 @@ class SSHRunner:
                 tar_cmd += ["-C", str(local_path.resolve().parent), local_path.name]
 
             logger.debug("Batch tar upload: %d file(s) -> %s:%s", len(entries), self._host, remote_dir)
-            tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            tar_proc = subprocess.Popen(
+                tar_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_windows_no_window_kwargs(),
+            )
             ssh_proc = subprocess.Popen(
-                ssh_cmd, stdin=tar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                ssh_cmd,
+                stdin=tar_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_windows_no_window_kwargs(),
             )
             if tar_proc.stdout:
                 tar_proc.stdout.close()
@@ -321,7 +346,14 @@ class SSHRunner:
         if self._verbose:
             print(f"[cmd] {' '.join(cmd)}  # upload -> {remote_path}", flush=True)
         logger.debug("Uploading text payload (%d chars) -> %s:%s", len(text), self._host, remote_path)
-        result = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=effective_timeout)
+        result = subprocess.run(
+            cmd,
+            input=text,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **_windows_no_window_kwargs(),
+        )
         if result.returncode != 0:
             logger.warning("SSH text upload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -362,7 +394,13 @@ class SSHRunner:
         cmd += [self._remote_scp_target(remote_path), str(local_path)]
         self._print_cmd(cmd)
         logger.debug("Downloading via scp %s:%s -> %s", self._host, remote_path, local_path)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            **_windows_no_window_kwargs(),
+        )
         if result.returncode != 0:
             logger.warning("download (scp) failed (rc=%d): %s", result.returncode, result.stderr.strip())
         else:
@@ -396,9 +434,18 @@ class SSHRunner:
             print(f"[cmd] {' '.join(ssh_cmd)} | {' '.join(tar_cmd)}  # download {remote_path} -> {local_path}", flush=True)
         logger.debug("Downloading via tar pipe %s:%s -> %s", self._host, remote_path, local_path)
 
-        ssh_proc = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ssh_proc = subprocess.Popen(
+            ssh_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
+        )
         tar_proc = subprocess.Popen(
-            tar_cmd, stdin=ssh_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            tar_cmd,
+            stdin=ssh_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
         )
         if ssh_proc.stdout:
             ssh_proc.stdout.close()
@@ -444,9 +491,18 @@ class SSHRunner:
         if self._verbose:
             print(f"[cmd] {' '.join(tar_cmd)} | {' '.join(ssh_cmd)}  # upload {local_path} -> {remote_path}", flush=True)
         logger.debug("Uploading via tar pipe %s -> %s:%s", local_path, self._host, remote_path)
-        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        tar_proc = subprocess.Popen(
+            tar_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
+        )
         ssh_proc = subprocess.Popen(
-            ssh_cmd, stdin=tar_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ssh_cmd,
+            stdin=tar_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_windows_no_window_kwargs(),
         )
         if tar_proc.stdout:
             tar_proc.stdout.close()
@@ -483,6 +539,7 @@ class SSHRunner:
                 stderr=subprocess.STDOUT,
                 text=False,
                 bufsize=0,
+                **_windows_no_window_kwargs(),
             )
             if proc.stdin is None or proc.stdout is None:
                 proc.terminate()

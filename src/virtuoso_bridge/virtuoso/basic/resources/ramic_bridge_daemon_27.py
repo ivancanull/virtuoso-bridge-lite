@@ -75,6 +75,24 @@ fcntl.fcntl(stdout_fd, fcntl.F_SETFL, stdout_fl & ~os.O_NONBLOCK)  # Ensure bloc
 # Global watchdog timer reference
 watchdog_timer = None
 
+
+def _safe_sendall(conn, data):
+    try:
+        conn.sendall(data)
+    except socket.error:
+        pass
+
+
+def _safe_close_connection(conn):
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except socket.error:
+        pass
+    try:
+        conn.close()
+    except socket.error:
+        pass
+
 def watchdog_callback():
     """Watchdog callback function that sends SIGINT signal to Virtuoso process when timeout occurs."""
     global timeout_flag
@@ -202,32 +220,31 @@ def handle_external_connection(conn, addr):
 
         # Python 2.7 compatibility: handle returnData properly
         if isinstance(returnData, bytearray):
-            conn.sendall(str(returnData))
+            _safe_sendall(conn, str(returnData))
         elif hasattr(returnData, 'encode'):  # Check if it's unicode
-            conn.sendall(returnData.encode('utf-8'))
+            _safe_sendall(conn, returnData.encode('utf-8'))
         else:
-            conn.sendall(returnData)
+            _safe_sendall(conn, returnData)
 
     except ValueError as e:
         # Python 2.7 compatibility: handle JSON decode errors
         error_msg = "\x15JSONDecodeError: {0}".format(str(e))
         if hasattr(error_msg, 'encode'):  # Check if it's unicode
             error_msg = error_msg.encode('utf-8')
-        conn.sendall(error_msg)
+        _safe_sendall(conn, error_msg)
     except Exception as e:
         # Python 2.7 compatibility: except Exception, e syntax
         traceback.print_exc()
         error_msg = "\x15{0}".format(str(e))
         if hasattr(error_msg, 'encode'):  # Check if it's unicode
             error_msg = error_msg.encode('utf-8')
-        conn.sendall(error_msg)
+        _safe_sendall(conn, error_msg)
     finally:
         # Ensure watchdog timer is cleaned up
         timeout_flag = True
         if watchdog_timer:
             watchdog_timer.cancel()
-        conn.shutdown(socket.SHUT_RDWR)
-        conn.close()
+        _safe_close_connection(conn)
 
 def start_server():
     """Start the TCP server to accept client connections."""
@@ -252,7 +269,11 @@ def start_server():
         s.listen(1)
         while True:
             conn, addr = s.accept()
-            handle_external_connection(conn, addr)
+            try:
+                handle_external_connection(conn, addr)
+            except Exception:
+                traceback.print_exc()
+                _safe_close_connection(conn)
     finally:
         s.close()
 
