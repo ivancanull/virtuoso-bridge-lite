@@ -80,6 +80,27 @@ If not healthy: `virtuoso-bridge restart`. If it says to load `virtuoso_setup.il
 - **Large edits**: split into chunks, open first with `mode="w"`, append with `mode="a"`
 - **Screenshot after layout work**: use `examples/01_virtuoso/basic/04_screenshot.py` pattern to verify visually
 
+## ADE control
+
+Load `ade_bridge.il` to control ADE Explorer from Python:
+
+```python
+client.load_il("examples/01_virtuoso/assets/ade_bridge.il")
+
+# List / get / set design variables
+client.execute_skill('adeBridgeListVars()')
+client.execute_skill('adeBridgeGetVar("VDD")')
+client.execute_skill('adeBridgeSetVar("VDD" "0.85")')
+
+# Trigger simulation (requires ADE Explorer window open)
+client.execute_skill('adeBridgeRunSim()')
+
+# Get results directory
+client.execute_skill('adeBridgeGetResultsDir()')
+```
+
+Note: uses `sevRun(sevSession(window))` internally. `asiRunSimulation` is not available on IC251.
+
 ## References
 
 Load only when needed:
