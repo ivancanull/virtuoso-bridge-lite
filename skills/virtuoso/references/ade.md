@@ -84,8 +84,13 @@ maeAddOutput("OutPlot" "TRAN" ?outputType "net" ?signalName "/OUT")
 ; Expression output (scalar)
 maeAddOutput("maxOut" "TRAN" ?outputType "point" ?expr "ymax(VT(\"/OUT\"))")
 
+; Bandwidth measurement (-3 dB)
+; NOTE: use VF() (frequency-domain voltage) not v() in Maestro output expressions
+maeAddOutput("BW" "AC" ?outputType "point" ?expr "bandwidth(mag(VF(\"/OUT\")) 3 \"low\")")
+
 ; Add spec (pass/fail check)
 maeSetSpec("maxOut" "TRAN" ?lt "400m")   ; < 400mV
+maeSetSpec("BW" "AC" ?gt "1G")           ; > 1 GHz
 ; Spec operators: ?lt (<), ?gt (>), ?minimum, ?maximum, ?tolerence
 ```
 

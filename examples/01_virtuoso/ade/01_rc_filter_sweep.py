@@ -5,8 +5,10 @@ End-to-end example:
 1. Create schematic (vdc source + R + C + GND)
 2. Set component parameters via CDF
 3. Create Maestro view with AC analysis + parametric sweep on C
+   - Add bandwidth measurement output with spec (BW > 1 GHz)
 4. Run simulation (single run covers both C values)
-5. Read & compare the AC magnitude responses
+5. Read & compare the AC magnitude responses + check spec
+6. Open Maestro GUI with results
 
 Prerequisites:
 - virtuoso-bridge tunnel running
@@ -28,7 +30,8 @@ from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 
 LIB = "PLAYGROUND_LLM"
-CELL = "TB_RC_FILTER_SWEEP"
+# Use timestamp to avoid cell name collisions across runs
+CELL = "TB_RC_FILTER_" + __import__("time").strftime("%m%d_%H%M%S")
 C_VALUES = ["1p", "100f"]   # comma-separated in Maestro for parametric sweep
 
 REMOTE_TMP = "/tmp/rc_filter_ac"
@@ -189,9 +192,6 @@ def create_schematic(client: VirtuosoClient) -> None:
     skill(client, f"schCheck({cv})")
     skill(client, f"dbSave({cv})")
 
-    # Open schematic in GUI (Maestro needs it visible)
-    client.open_window(LIB, CELL, view="schematic")
-
     r = skill(client, f"{cv}~>instances~>name")
     print(f"[schematic] Instances: {r.output}")
     print("[schematic] Params: V0.acm=1, R0.r=1k, C0.c=c_val (design variable)")
@@ -233,10 +233,24 @@ def create_maestro(client: VirtuosoClient) -> str:
           f'("incrType" "Logarithmic") ("stepTypeLog" "Points Per Decade") '
           f'("dec" "20")) ?session "{ses}")')
 
-    # Add output signal
+    # NOTE: Spectre X mode and accuracy preset (CX/AX/MX/LX/VX) must be
+    # configured manually in the Maestro GUI via Options → High-Performance
+    # Simulation Options. These settings are not exposed through mae* SKILL API.
+
+    # Add output: waveform
     skill(client,
           f'maeAddOutput("Vout" "AC" ?outputType "net" '
           f'?signalName "/OUT" ?session "{ses}")')
+
+    # Add output: -3 dB bandwidth measurement
+    # NOTE: use VF() (frequency-domain voltage) not v() in Maestro expressions
+    skill(client,
+          f'maeAddOutput("BW" "AC" ?outputType "point" '
+          f'?expr "bandwidth(mag(VF(\\"/OUT\\")) 3 \\"low\\")" '
+          f'?session "{ses}")')
+
+    # Add spec: bandwidth > 1 GHz
+    skill(client, f'maeSetSpec("BW" "AC" ?gt "1G" ?session "{ses}")')
 
     # Set design variable with comma-separated sweep values
     sweep_str = ",".join(C_VALUES)
@@ -370,6 +384,39 @@ def compare_results(datasets: dict[str, list[tuple[float, float]]]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5b. Check specs
+# ---------------------------------------------------------------------------
+
+def check_specs(client: VirtuosoClient) -> None:
+    """Check bandwidth spec results via Maestro API.
+
+    Uses ``maeGetOutputValue`` to read the BW measurement and
+    ``maeGetSpecStatus`` to check pass/fail for each sweep point.
+
+    With parametric sweeps, each sweep point has a ``pointId``
+    (starting from 1).
+    """
+    print("\n--- Bandwidth spec (BW > 1 GHz) ---")
+
+    r = skill(client, "maeOpenResults()")
+
+    # Iterate over sweep points (pointId starts at 1)
+    for pid in range(1, len(C_VALUES) + 1):
+        r_bw = skill(client, f'maeGetOutputValue("BW" "AC" ?pointId {pid})')
+        r_spec = skill(client, f'maeGetSpecStatus("BW" "AC" ?pointId {pid})')
+        bw = r_bw.output if r_bw.output else "N/A"
+        status = r_spec.output.strip('"') if r_spec.output else "?"
+        try:
+            bw_hz = float(bw)
+            bw_str = f"{bw_hz:.3e} Hz"
+        except (ValueError, TypeError):
+            bw_str = bw
+        print(f"  point {pid}: BW = {bw_str}  [{status}]")
+
+    skill(client, "maeCloseResults()")
+
+
+# ---------------------------------------------------------------------------
 # 6. Open Maestro GUI with history results
 # ---------------------------------------------------------------------------
 
@@ -422,6 +469,7 @@ def open_maestro_with_history(client: VirtuosoClient,
 
 def main() -> int:
     client = VirtuosoClient.from_env()
+    print(f"[info] Cell: {LIB}/{CELL}")
 
     # 1. Create schematic
     create_schematic(client)
@@ -441,6 +489,9 @@ def main() -> int:
     else:
         print("[warn] No result sets found — check simulation output")
         return 1
+
+    # 5b. Check spec via Maestro API
+    check_specs(client)
 
     # 6. Open Maestro GUI with latest history
     open_maestro_with_history(client, results_dir)
