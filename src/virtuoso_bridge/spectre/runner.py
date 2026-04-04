@@ -499,6 +499,24 @@ class SpectreSimulator:
             ssh_runner=ssh_runner,
         )
 
+    @classmethod
+    def local(
+        cls,
+        spectre_cmd: str = "spectre",
+        spectre_args: list[str] | tuple[str, ...] | None = None,
+        timeout: int = 600,
+        work_dir: Path | None = None,
+        output_format: str | None = "psfascii",
+    ) -> "SpectreSimulator":
+        """Create a SpectreSimulator for local execution (no SSH)."""
+        return cls(
+            spectre_cmd=spectre_cmd,
+            spectre_args=spectre_args,
+            timeout=timeout,
+            work_dir=work_dir,
+            output_format=output_format,
+        )
+
     # -- public API ---------------------------------------------------------
 
     def run_simulation(self, netlist: Path, params: dict) -> SimulationResult:
