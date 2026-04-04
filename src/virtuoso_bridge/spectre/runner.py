@@ -473,10 +473,21 @@ class SpectreSimulator:
     ) -> "SpectreSimulator":
         """Create a remote SpectreSimulator from environment variables.
 
-        If *ssh_runner* is provided, reuse it instead of creating a new SSH
-        connection.  This is useful when a ``VirtuosoClient`` is already
-        connected — pass ``client.ssh_runner`` to share the connection.
+        Automatically reuses the SSH connection managed by ``virtuoso-bridge
+        start`` (via ControlMaster).  If *ssh_runner* is explicitly provided,
+        uses that instead.  Raises RuntimeError if no connection is available.
         """
+        if ssh_runner is None:
+            from virtuoso_bridge.transport.tunnel import SSHClient
+            if not SSHClient.is_running():
+                raise RuntimeError(
+                    "No virtuoso-bridge connection found. "
+                    "Run `virtuoso-bridge start` first."
+                )
+            # Create an SSHRunner with the same host/user/jump config —
+            # ControlMaster=auto will reuse the existing SSH connection.
+            ssh_runner = SSHClient.from_env(keep_remote_files=keep_remote_files).ssh_runner
+
         return cls(
             spectre_cmd=spectre_cmd,
             spectre_args=spectre_args,
