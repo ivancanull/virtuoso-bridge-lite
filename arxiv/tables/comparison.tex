@@ -12,6 +12,8 @@ Design goal & Pythonic RPC for interactive local use & Agent-native harness for 
 Architecture & Single layer: Python client $\to$ Virtuoso server & Two decoupled layers: VirtuosoClient (TCP) + SSHClient (transport) \\
 Remote support & Local only (Unix socket or TCP on localhost) & SSH tunnel with jump host, persistent connection, auto port retry \\
 Programmability & One level: Python-to-SKILL function mapping & Three levels: raw SKILL, script injection, Pythonic APIs \\
+Netlist I/O & Not integrated & CDL import (spiceIn), Spectre netlist export (Maestro API) \\
+ADE control & Not integrated & Maestro test/analysis/sweep/spec via \texttt{mae*} SKILL API \\
 Simulation & Not integrated & Spectre runner + PSF parser (real and complex data) \\
 Agent support & Not designed for agents & Skill files, CLI lifecycle, persistent tunnel, command logging \\
 Type mapping & Automatic bidirectional (Python $\leftrightarrow$ SKILL objects) & String-based \\

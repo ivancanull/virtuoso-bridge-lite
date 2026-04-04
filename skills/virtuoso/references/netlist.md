@@ -53,6 +53,26 @@ Syntax:
 | Parameters | `C=1e-14` | `c=1e-14` |
 | Case | Mostly uppercase keywords | Lowercase |
 
+## Parameter Name Mapping
+
+Some parameters have different names in schematic CDF vs netlist:
+
+| Schematic CDF | Spectre/CDL netlist | Description |
+|---------------|---------------------|-------------|
+| `acm` | `mag` | AC magnitude |
+| `vdc` | `dc` | DC voltage |
+| `r` | `r` | Resistance (same) |
+| `c` | `c` | Capacitance (same) |
+
+## Source Device Mapping
+
+`analogLib/vsin` in the schematic becomes `vsource type=sine` in Spectre netlist. There is no separate `vsin` device in Spectre — it is a mode of `vsource`.
+
+`spiceIn` importing a CDL with `vsin` will create `analogLib/vsource` (not `analogLib/vsin`). To get `vsin` in the schematic, either:
+- Change the instance master manually after import
+- Use `client.schematic.edit()` to add the source with the correct master
+- Add the source via SKILL: `dbCreateInst(cv dbOpenCellView("analogLib" "vsin" "symbol") ...)`
+
 ## Import: CDL → Virtuoso Schematic
 
 Use `spiceIn` (Cadence command-line tool). Must run via SSH, not via SKILL `system()`.
@@ -102,6 +122,24 @@ Key points:
 - Complete and correct — includes subcircuit hierarchy, model includes, simulator options
 - `auCdl` export via `si -batch` does **not work** reliably outside Virtuoso (missing SKILL callbacks)
 
+## Direct Schematic Read → Netlist
+
+The schematic database (instances, nets, terminals) can be read directly via SKILL and assembled into any netlist format without relying on external netlisters. See `examples/01_virtuoso/schematic/02_read_connectivity.py`.
+
+Key SKILL accessors:
+- `cv~>instances` → all instances
+- `inst~>instTerms` → instance terminals
+- `instTerm~>net~>name` → connected net name
+- `cv~>nets` → all nets
+- `net~>instTerms` → all inst.term pairs on a net
+- `cv~>terminals` → top-level pins and directions
+
+This gives the same connectivity information as CDL or Spectre netlisters — just needs formatting into the target syntax. Pay attention to:
+- Bus notation: `BOT<0>` in schematic vs `BOT\<0\>` in Spectre
+- Device names: `cap` (CDL) vs `capacitor` (Spectre)
+- Pin order: CDL uses positional, Spectre uses `(node1 node2)`
+- Parameters: CDL `C=1e-14`, Spectre `c=1e-14`
+
 ## Roundtrip: Create → Export → Import
 
 ```
@@ -120,7 +158,24 @@ Spectre → CDL conversion is simple text processing:
 - `(node1 node2) capacitor c=` → `node1 node2 cap C=`
 - Remove backslash escaping on bus brackets
 
+## Sample Netlists
+
+The same circuit in three representations: a 2-bit CDAC (cap_unit × [1,2]) with a 1Ω resistor from the capacitor top-plate to VOUT.
+
+```
+        VOUT ──[R0 1Ω]── TOP ──┬── cap_unit (BOT<0>)  ← bit0, ×1
+                                ├── cap_unit (BOT<1>)  ← bit1, ×2
+                                └── cap_unit (BOT<1>)
+```
+
+Sample files in `references/netlist_samples/` — a 2-stage RC low-pass cascade (rc_unit → rc_cascade_2 → tb_rc_cascade with vsin source). Generated from an actual CDL → spiceIn → Virtuoso → export flow, AC-verified (2-pole roll-off at 159 MHz).
+
+- `netlist_samples/rc_cascade.cdl` — CDL input (source of truth, fed to spiceIn)
+- `netlist_samples/rc_cascade.scs` — Spectre output (exported via `maeCreateNetlistForCorner`)
+- `netlist_samples/rc_cascade.connectivity.txt` — schematic read (from `02_read_connectivity.py`, all 3 hierarchy levels)
+
 ## Examples
 
+- `examples/01_virtuoso/schematic/02_read_connectivity.py` — read schematic connectivity via SKILL
 - `examples/01_virtuoso/schematic/08_import_cdl_cap_array.py` — CDL → spiceIn import
 - `examples/01_virtuoso/ade/01_rc_filter_sweep.py` — includes Spectre netlist export via maeCreateNetlistForCorner

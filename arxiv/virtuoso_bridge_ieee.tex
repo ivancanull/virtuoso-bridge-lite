@@ -128,7 +128,7 @@ An agent-native system differs from a conventional API in that it must support a
 
 \paragraph{Persistent tunnel.} The SSH tunnel process is detached from the parent Python process and survives across script invocations. Tunnel state, including PID, port, and remote host, is persisted to a JSON file and reused by subsequent connections. This eliminates the repeated setup cost that would otherwise dominate high-frequency agent interaction. On Windows, platform-specific process detachment flags are used to ensure tunnel stability.
 
-\paragraph{Runnable examples.} The repository includes over 30 runnable examples covering layout editing, schematic creation, CDL export, and Spectre simulation including transient, DC+AC, and PSS+Pnoise analyses. These serve as both documentation and few-shot references for agents. Most examples require only \texttt{analogLib} and run without a specific PDK, enabling immediate prototyping.
+\paragraph{Runnable examples.} The repository includes over 30 runnable examples covering layout editing, schematic creation, CDL netlist import via \texttt{spiceIn}, Spectre netlist export via Maestro SKILL APIs, ADE Assembler (Maestro) test creation with parametric sweeps and spec checking, and Spectre simulation including transient, DC+AC, and PSS+Pnoise analyses. These serve as both documentation and few-shot references for agents. Most examples require only \texttt{analogLib} and run without a specific PDK, enabling immediate prototyping.
 
 %═══════════════════════════════════════════════════════════════════════
 \section{Simulation Integration}
@@ -155,7 +155,7 @@ Both systems use the same three SKILL calls, namely \texttt{ipcBeginProcess}, \t
 
 SkillBridge provides transparent Python-to-SKILL type mapping, IDE tab completion, and an interactive programming model optimized for human exploration. These are genuine strengths for local, interactive use.
 
-Virtuoso-Bridge provides SSH remote access, script injection, structured layout and schematic APIs, Spectre simulation integration, multimodal feedback, and agent-native lifecycle management. These capabilities are designed for automated, remote, high-frequency workflows driven by coding agents.
+Virtuoso-Bridge provides SSH remote access, script injection, structured layout and schematic APIs, CDL netlist import (\texttt{spiceIn}), Spectre netlist export, ADE Assembler (Maestro) control for simulation setup and result analysis, standalone Spectre simulation integration, multimodal feedback, and agent-native lifecycle management. These capabilities are designed for automated, remote, high-frequency workflows driven by coding agents.
 
 The two systems are complementary rather than competitive. They address different use cases built on the same underlying mechanism.
 

@@ -27,7 +27,8 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 **3. Batteries included** — 30+ runnable examples, ready to use out of the box.
 - Layout: polygon, via, multi-layer routing, bus wiring, read-back geometry
-- Schematic: create RC circuits, read connectivity, export CDL netlist
+- Schematic: create circuits, read connectivity, import CDL via spiceIn, export Spectre netlist
+- ADE Assembler (Maestro): create tests, AC/tran analysis, parametric sweep, bandwidth spec, display results
 - Spectre: transient, DC+AC frequency response, PSS+Pnoise (StrongArm comparator), veriloga
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
