@@ -113,7 +113,7 @@ result = client.execute_skill("1+2")
 print(result)  # VirtuosoResult(status=SUCCESS, output='3')
 ```
 
-Done.
+Done. For full API reference, see the [documentation site](https://virtuoso-bridge.tokenzhang.com).
 
 ### Prerequisites
 

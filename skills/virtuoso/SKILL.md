@@ -1,45 +1,82 @@
 ---
 name: virtuoso
-description: "Bridge to remote Cadence Virtuoso: SKILL execution, layout/schematic editing via Python API."
+description: "Bridge to remote Cadence Virtuoso: SKILL execution, layout/schematic editing, ADE Maestro simulation setup via Python API. TRIGGER when the user mentions Virtuoso, SKILL (the Cadence language), Cadence IC, layout editing, schematic creation, cellview operations, CIW commands, ADE setup, Maestro configuration, design variables, OCEAN results, or any EDA task involving a Cadence design database — even if they just say 'draw a circuit' or 'place some transistors'."
 ---
 
 # Virtuoso Skill
 
-## What you can do
+## How it works
 
-Two approaches — use whichever fits:
+You control a remote Cadence Virtuoso instance through `virtuoso-bridge` — a Python client that sends SKILL commands to the running Virtuoso CIW over a persistent connection. You write Python locally; Virtuoso executes SKILL remotely.
 
-### 1. Python API (preferred)
+The bridge supports three levels of abstraction (highest to lowest):
+
+| Level | When to use | Example |
+|-------|-------------|---------|
+| **Python API** (`client.layout.*`, `client.schematic.*`) | Layout/schematic editing — structured, safe, handles context manager | `client.layout.edit(lib, cell)` |
+| **Inline SKILL** (`client.execute_skill(...)`) | ADE control, CDF params, anything the Python API doesn't cover | `client.execute_skill('maeRunSimulation()')` |
+| **SKILL file** (`client.load_il(...)`) | Bulk operations, complex procedures — keeps payloads small | `client.load_il("my_script.il")` |
+
+Use the highest level that covers your need. Drop to a lower level only when the higher one doesn't have the method.
+
+## Before you start
+
+1. **Check connection**: run `virtuoso-bridge status`. If unhealthy: `virtuoso-bridge restart`.
+2. **Check examples first**: look at `examples/01_virtuoso/` below — if similar functionality exists, use it as a basis rather than writing from scratch.
+3. **Open the window**: call `client.open_window(lib, cell, view="layout")` so the user can see what you're doing in the GUI.
+
+## Core patterns
+
+### Client setup
 
 ```python
 from virtuoso_bridge import VirtuosoClient
 client = VirtuosoClient.from_env()
+```
 
-# Execute any SKILL expression
-client.execute_skill("1+2")
-client.execute_skill('hiGetCurrentWindow()')
+### Schematic editing
 
-# Load a .il file into Virtuoso
-client.load_il("path/to/script.il")
-
-# Layout editing
-with client.layout.edit("myLib", "myCell") as layout:
-    layout.add_rect("M1", "drawing", (0, 0, 1, 0.5))
-    layout.add_path("M2", "drawing", [(0, 0), (1, 0)], width=0.1)
-    layout.add_label("M1", "pin", (0.5, 0.25), "VDD")
-    layout.add_instance("tsmcN28", "nch_ulvt_mac", (0, 0), "M0")
-    layout.add_via("M1_M2", (0.5, 0.25))
-    shapes = layout.get_shapes()
-
-# Schematic editing
-with client.schematic.edit("myLib", "myCell") as sch:
+```python
+with client.schematic.edit(lib, cell) as sch:
     sch.add_instance("analogLib", "vdc", (0, 0), "V0", params={"vdc": "0.9"})
     sch.add_instance("analogLib", "gnd", (0, -0.5), "GND0")
-    sch.add_wire([(0, 0), (0, 0.5)])
+    sch.add_wire_between_instance_terms("V0", "MINUS", "GND0", "gnd!")
     sch.add_pin("VDD", "inputOutput", (0, 1.0))
+```
 
-# Other operations
-client.open_window("myLib", "myCell", view="layout")
+Use terminal-aware helpers (`add_wire_between_instance_terms`, `add_net_label_to_instance_term`) instead of guessing pin coordinates — they resolve positions from the database. See `references/schematic.md` for full API.
+
+### Layout editing
+
+```python
+with client.layout.edit(lib, cell) as layout:
+    layout.add_rect("M1", "drawing", (0, 0, 1, 0.5))
+    layout.add_path("M2", "drawing", [(0, 0), (1, 0)], width=0.1)
+    layout.add_instance("tsmcN28", "nch_ulvt_mac", (0, 0), "M0")
+    layout.add_via("M1_M2", (0.5, 0.25))
+```
+
+For large edits: split into chunks — first call with `mode="w"` (create), then `mode="a"` (append). Screenshot after layout work to verify visually. See `references/layout.md` for full API.
+
+### Inline SKILL (for anything beyond the Python API)
+
+```python
+client.execute_skill('dbOpenCellViewByType("myLib" "myCell" "layout")')
+```
+
+### SKILL file (for bulk / complex operations)
+
+```python
+client.load_il("my_script.il")
+client.execute_skill('myCustomFunction("arg1" "arg2")')
+```
+
+Put loops in `.il` files rather than sending giant SKILL strings — keeps each request payload small while the heavy loop runs inside Virtuoso.
+
+### Other operations
+
+```python
+client.open_window(lib, cell, view="layout")
 client.get_current_design()
 client.save_current_cellview()
 client.close_current_cellview()
@@ -47,88 +84,28 @@ client.download_file(remote_path, local_path)
 client.run_shell_command("ls /tmp/")
 ```
 
-### 2. Raw SKILL (when no Python API exists)
+## ADE control (Maestro)
 
-Write SKILL directly for anything the Python API doesn't cover:
-
-```python
-# Inline SKILL
-client.execute_skill('dbOpenCellViewByType("myLib" "myCell" "layout")')
-
-# Or write a .il file and load it
-client.load_il("my_custom_script.il")
-# Then call functions defined in it
-client.execute_skill('myCustomFunction("arg1" "arg2")')
-```
-
-For bulk operations (thousands of shapes), put the loop in a `.il` file rather than sending a giant SKILL string — keeps each request payload small while the heavy loop runs inside Virtuoso.
-
-## Startup check
-
-Before any live Virtuoso action:
-
-```bash
-virtuoso-bridge status
-```
-
-If not healthy: `virtuoso-bridge restart`. If it says to load `virtuoso_setup.il`, paste that command in Virtuoso CIW first.
-
-## Guidelines
-
-- **Prefer Python API over raw SKILL** when a method exists (`client.layout.*`, `client.schematic.*`)
-- **Open the window** with `client.open_window(...)` so the user can see what you're doing
-- **Large edits**: split into chunks, open first with `mode="w"`, append with `mode="a"`
-- **Screenshot after layout work**: use `examples/01_virtuoso/basic/04_screenshot.py` pattern to verify visually
-
-## ADE control (Maestro mae* API)
-
-All functions below are native Cadence SKILL — no extra `.il` file needed.
+Quick pattern — open session, configure, run, read results:
 
 ```python
-# List / get / set design variables
-client.execute_skill('maeGetSetup(?typeName "globalVar")')
-client.execute_skill('maeGetVar("VDD")')
-client.execute_skill('maeSetVar("VDD" "0.85")')
-
-# Trigger simulation (async — GUI stays responsive)
-client.execute_skill('maeRunSimulation()')
-client.execute_skill("maeWaitUntilDone('All)")
-
-# Read results via OCEAN (built into CIW, no extra loading)
-client.execute_skill('openResults("...")')
-client.execute_skill('selectResults("ac")')
-client.execute_skill('ocnPrint(v("/OUT") ?output "/tmp/out.txt")')
-client.download_file('/tmp/out.txt', local_path)
-```
-
-### Maestro: create, run, and display results
-
-```python
-# Create maestro + AC analysis
 ses = client.execute_skill(f'maeOpenSetup("{lib}" "{cell}" "maestro")').output.strip('"')
 client.execute_skill(f'maeCreateTest("AC" ?lib "{lib}" ?cell "{cell}" ?view "schematic" ?simulator "spectre" ?session "{ses}")')
 client.execute_skill(f'maeSetAnalysis("AC" "ac" ?enable t ?options `(("start" "1") ("stop" "10G") ("dec" "20")) ?session "{ses}")')
 client.execute_skill(f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "maestro" ?session "{ses}")')
-
-# Run simulation (async — GUI stays responsive)
 client.execute_skill('maeRunSimulation()')
 client.execute_skill("maeWaitUntilDone('All)")
-
-# Open maestro GUI with latest history
-# 1. Close old sessions (edit mode is exclusive)
-# 2. List histories: getDirFiles on results dir, filter dot-prefixed
-# 3. deOpenCellView → maeMakeEditable → maeRestoreHistory → maeSaveSetup
 ```
 
-See `examples/01_virtuoso/ade/01_rc_filter_sweep.py` for the complete workflow.
+For the full API (variables, outputs, specs, corners, OCEAN results, history display), read `references/ade.md`. See `examples/01_virtuoso/ade/01_rc_filter_sweep.py` for the complete workflow.
 
 ## References
 
-Load only when needed:
+Load only when needed — these contain detailed API docs and edge-case guidance:
 
-- `references/layout.md` — layout API details and SKILL examples
-- `references/schematic.md` — schematic API details and examples
-- `references/ade.md` — ADE control, simulation triggering, OCEAN result reading
+- `references/schematic.md` — schematic API, terminal-aware helpers, CDF parameter setting
+- `references/layout.md` — layout API, read/query, mosaic, layer control
+- `references/ade.md` — ADE Maestro mae* API, OCEAN results, corners, simulation control
 - `references/netlist.md` — CDL/Spectre netlist formats, spiceIn import, netlist export
 
 ## Existing examples
@@ -162,3 +139,8 @@ Load only when needed:
 
 ### `examples/01_virtuoso/ade/`
 - `01_rc_filter_sweep.py` — full Maestro workflow: create schematic, AC analysis, parametric sweep, bandwidth spec, display results
+
+## Related skills
+
+- **spectre** — standalone netlist-driven Spectre simulation (no Virtuoso GUI). Use when the user has a `.scs` netlist and wants to run it directly.
+- **optimizer** — automated parameter optimization via Spectre simulation loops (TuRBO). Use when the user wants to sweep/tune circuit parameters to meet specs.

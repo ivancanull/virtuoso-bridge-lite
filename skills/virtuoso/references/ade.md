@@ -1,5 +1,20 @@
 # ADE Reference
 
+## Table of Contents
+
+1. [Supported ADE Types](#supported-ade-types)
+2. [Design Variables](#design-variables)
+3. [Maestro mae* API](#maestro-mae-api-ic618--ic231) — session management, reading setup, creating tests, analysis config, outputs, variables, corners, env options, save, run, read results, history display, utilities
+4. [Known Blockers](#known-blockers) — GUI dialogs, schematic check, edit locks
+5. [Pnoise Jitter Event — Automation Limitation](#pnoise-jitter-event--automation-limitation)
+6. [Reading Results — OCEAN API](#reading-results--ocean-api)
+7. [OCEAN Quick Reference](#ocean-quick-reference)
+8. [Complete Maestro Workflow (Python)](#complete-maestro-workflow-python)
+9. [Maestro SKILL Utilities](#maestro-skill-utilities)
+10. [Examples](#examples)
+
+---
+
 ## Supported ADE Types
 
 | Type | Run function | Session access |
@@ -149,14 +164,83 @@ maeSetVar("c_val" "1p,100f" ?session "fnxSession4")
 
 ### Corners
 
-```scheme
-; Create corner and disable it for specific tests
-maeSetCorner("myCorner" ?disableTests `("AC" "TRAN"))
+Corner management has limited SKILL API support. `maeSetCorner` can only create/enable/disable corners. Model files and variables must be set by editing `maestro.sdb` XML directly.
 
-; Set per-corner variable values (space-separated)
-maeSetVar("vdd" "1.2 1.4" ?typeName "corner" ?typeValue '("myCorner"))
-maeSetVar("temperature" "50 100" ?typeName "corner" ?typeValue '("myCorner"))
+#### Read corners
+
+Corners are stored in `maestro.sdb` XML. Download and parse:
+
+```python
+client.download_file(f'{maestro_dir}/maestro.sdb', '/tmp/maestro.sdb')
+# Parse <corner enabled="1">name ... </corner> blocks
+# Each corner has: <vars>, <models> sub-elements
 ```
+
+#### Create corner (empty)
+
+```scheme
+; Creates corner with no model/var — only ?enabled is supported
+maeSetCorner("tt_25" ?enabled t)
+```
+
+#### Create corner with model + temperature
+
+Full corners (with model file and variables) require editing `maestro.sdb` XML. Close the maestro session first, then insert a corner XML block before `</corners>`:
+
+```xml
+<corner enabled="1">tt_25
+    <vars>
+        <var>temperature
+            <value>25</value>
+        </var>
+    </vars>
+    <models>
+        <model enabled="1">toplevel_modified.scs
+            <modeltest>All</modeltest>
+            <modelblock>Global</modelblock>
+            <modelfile>/home/zhangz/T28/toplevel_modified.scs</modelfile>
+            <modelsection>"top_tt"</modelsection>
+        </model>
+    </models>
+</corner>
+```
+
+Python helper to insert corners (runs on remote via `upload_file` + `run_shell_command`):
+
+```python
+# 1. Close maestro session
+client.execute_skill('MaestroClose("myLib" "myCell")')
+
+# 2. Edit sdb on remote (python2 script uploaded and executed)
+# Insert new corner XML blocks before first </corners> tag
+# See edit_sdb.py pattern: read lines, insert before </corners>, write back
+
+# 3. Reopen maestro to load changes
+client.execute_skill('MaestroOpen("myLib" "myCell")')
+```
+
+#### Enable / Disable corner
+
+```scheme
+maeSetCorner("tt_25" ?enabled t)    ; enable
+maeSetCorner("tt_25" ?enabled nil)  ; disable
+```
+
+#### Delete corner
+
+```scheme
+maeDeleteCorner("tt_25")
+maeSaveSetup()  ; persist deletion
+```
+
+**Note:** `maeDeleteCorner` works in memory. `maeSaveSetup` persists to sdb. If the corner was inserted by direct sdb edit without reopening maestro first, the deletion may not take effect — always reopen maestro after sdb edits before using mae* functions.
+
+#### Explored but unsupported keywords
+
+`maeSetCorner` only accepts `?enabled`. These keywords do NOT work:
+`?temperature`, `?model`, `?modelFile`, `?modelSection`, `?vars`, `?models`, `?varList`, `?file`, `?section`, `?copy`, `?copyFrom`
+
+`maeLoadCorners(filepath)` accepts a file path but does not import corners in practice (returns nil silently).
 
 ### Environment Options (Model Files)
 
@@ -268,24 +352,6 @@ maeCreateNetlistForCorner("TRAN2" "myCorner_2" "./myNetlistDir")
 ; Migrate from ADE L / ADE XL to Maestro
 maeMigrateADELStateToMaestro("myLib" "myCell" "spectre_state1")
 maeMigrateADEXLToMaestro("myLib" "myCell" "adexl" ?maestroView "maestro_convert")
-```
-
-## CDF Parameter Setting
-
-The Python schematic API doesn't support CDF parameters. Set them via SKILL after creating the schematic:
-
-```python
-# Open cellview for editing
-client.execute_skill(f'_cv = dbOpenCellViewByType("{lib}" "{cell}" "schematic" nil "a")')
-
-# Set a CDF parameter
-client.execute_skill(
-    'cdfFindParamByName(cdfGetInstCDF('
-    'car(setof(i _cv~>instances i~>name == "R0")))'
-    ' "r")~>value = "1k"'
-)
-
-client.execute_skill('dbSave(_cv)')
 ```
 
 ## Known Blockers
@@ -413,12 +479,12 @@ client.execute_skill(
     f'?signalName "/OUT" ?session "{ses}")')
 client.execute_skill(f'maeSetVar("c_val" "1p,100f" ?session "{ses}")')
 
-# 5. Save + run (synchronous)
+# 5. Save + run (async — never use ?waitUntilDone t, it blocks the event loop)
 client.execute_skill(
     f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" '
     f'?view "maestro" ?session "{ses}")')
-r = client.execute_skill(
-    f'maeRunSimulation(?waitUntilDone t ?session "{ses}")', timeout=300)
+client.execute_skill(f'maeRunSimulation(?session "{ses}")')
+client.execute_skill("maeWaitUntilDone('All)", timeout=300)
 
 # 6. Export results
 client.execute_skill(

@@ -1,6 +1,6 @@
 ---
 name: spectre
-description: "Run Cadence Spectre simulations remotely via virtuoso-bridge: upload netlists, execute, parse results."
+description: "Run Cadence Spectre simulations remotely via virtuoso-bridge: upload netlists, execute, parse PSF results. TRIGGER when the user wants to run a SPICE/Spectre simulation from a netlist file, do transient/AC/PSS/pnoise analysis outside Virtuoso GUI, parse PSF waveform data, or mentions Spectre APS/AXS modes. Use this for standalone netlist-driven simulation — for GUI-based ADE Maestro simulation, use the virtuoso skill instead."
 ---
 
 # Spectre Skill
@@ -140,3 +140,8 @@ spectre_mode_args("cx")       # Spectre X custom
 - `examples/02_spectre/01_veriloga_adc_dac.py` — 4-bit ADC/DAC transient with Verilog-A
 - `examples/02_spectre/04_strongarm_pss_pnoise.py` — StrongArm comparator PSS + Pnoise
 - Netlists in `examples/02_spectre/assets/`
+
+## Related skills
+
+- **virtuoso** — GUI-based Virtuoso workflow (schematic/layout editing, ADE Maestro simulation). Use when the user is working inside the Virtuoso GUI.
+- **optimizer** — automated parameter optimization over Spectre simulations. Builds on this skill's `SpectreSimulator` for the simulation loop.

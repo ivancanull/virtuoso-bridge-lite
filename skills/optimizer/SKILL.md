@@ -1,6 +1,6 @@
 ---
 name: optimizer
-description: "Optimize circuit parameters by looping Spectre simulations. Default algorithm: TuRBO."
+description: "Optimize analog circuit parameters (transistor sizing, biasing, passive values) by looping Spectre simulations with Bayesian optimization (TuRBO). TRIGGER when the user wants to sweep, tune, or optimize circuit parameters to meet specs — e.g., minimize power-delay product, maximize bandwidth, find optimal W/L ratios, or any design-space exploration that requires repeated simulation."
 ---
 
 # Circuit Optimizer Skill
@@ -75,3 +75,8 @@ pip install -e TuRBO/    # local TuRBO repo
 ```
 
 Or use `scipy.optimize.minimize` for simpler cases — no GP overhead.
+
+## Related skills
+
+- **spectre** — the underlying simulation runner (`SpectreSimulator`). Read this skill for netlist syntax, result parsing, and simulation modes.
+- **virtuoso** — if the circuit lives in Virtuoso, use the virtuoso skill to create/edit the schematic and export a netlist template before optimizing.
