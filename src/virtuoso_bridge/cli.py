@@ -8,6 +8,7 @@ import os
 import re
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -434,6 +435,55 @@ def cli_license() -> int:
 
 # -- main -------------------------------------------------------------------
 
+def cli_sim_jobs() -> int:
+    """Show status of submitted Spectre simulations."""
+    from virtuoso_bridge.spectre.runner import read_all_jobs, clear_finished_jobs
+
+    jobs = read_all_jobs()
+    if not jobs:
+        print("No simulation jobs found.")
+        return 0
+
+    running = [j for j in jobs if j.get("status") == "running"]
+    queued = [j for j in jobs if j.get("status") == "queued"]
+    done = [j for j in jobs if j.get("status") == "done"]
+    errored = [j for j in jobs if j.get("status") == "error"]
+
+    print(f"  Simulation Jobs: {len(running)} running, {len(queued)} queued, "
+          f"{len(done)} done, {len(errored)} failed\n")
+
+    for j in running + queued:
+        status_icon = "\033[33m●\033[0m" if j["status"] == "running" else "\033[90m○\033[0m"
+        profile = f" [{j['profile']}]" if j.get("profile") else ""
+        elapsed = ""
+        if j.get("submitted"):
+            try:
+                t0 = datetime.fromisoformat(j["submitted"])
+                dt = datetime.now(timezone.utc) - t0
+                elapsed = f"  {int(dt.total_seconds())}s"
+            except (ValueError, TypeError):
+                pass
+        print(f"  {status_icon} {j['id']}  {j['netlist']:<30s} {j['status']}{profile}{elapsed}")
+
+    for j in done[-5:]:  # show last 5 finished
+        print(f"  \033[32m✓\033[0m {j['id']}  {j['netlist']:<30s} done")
+
+    for j in errored[-3:]:  # show last 3 errors
+        err = j.get("errors", [""])[0][:60] if j.get("errors") else ""
+        print(f"  \033[31m✗\033[0m {j['id']}  {j['netlist']:<30s} {err}")
+
+    print()
+    return 0
+
+
+def cli_sim_clear() -> int:
+    """Clear finished/failed job records."""
+    from virtuoso_bridge.spectre.runner import clear_finished_jobs
+    n = clear_finished_jobs()
+    print(f"Cleared {n} finished job(s).")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="virtuoso-bridge")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -448,6 +498,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp = subparsers.add_parser(name, help=hlp)
         sp.add_argument("-p", "--profile", default=None,
                         help="Connection profile (reads VB_*_<profile> env vars)")
+    subparsers.add_parser("sim-jobs", help="Show submitted simulation jobs")
+    subparsers.add_parser("sim-clear", help="Clear finished/failed job records")
     return parser
 
 
@@ -461,6 +513,8 @@ def main(argv: list[str] | None = None) -> int:
         "restart": cli_restart,
         "status": cli_status,
         "license": cli_license,
+        "sim-jobs": cli_sim_jobs,
+        "sim-clear": cli_sim_clear,
     }
     # Pass profile to commands that support it
     profile = getattr(args, "profile", None)

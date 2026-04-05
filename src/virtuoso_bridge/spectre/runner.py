@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import logging
 import os
 import shlex
@@ -10,6 +11,7 @@ import subprocess
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -22,6 +24,59 @@ from virtuoso_bridge.transport.remote_paths import (
 from virtuoso_bridge.transport.ssh import SSHRunner, RemoteTaskResult, run_remote_task, remote_ssh_env_from_os
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Job registry — persists job status to disk so CLI can read it
+# ---------------------------------------------------------------------------
+
+_JOBS_DIR = Path.home() / ".cache" / "virtuoso_bridge" / "jobs"
+
+
+def _job_path(job_id: str) -> Path:
+    return _JOBS_DIR / f"{job_id}.json"
+
+
+def _write_job(job_id: str, data: dict) -> None:
+    _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    _job_path(job_id).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _update_job(job_id: str, updates: dict) -> None:
+    path = _job_path(job_id)
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.update(updates)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def read_all_jobs() -> list[dict]:
+    """Read all job records. Used by CLI ``sim-jobs``."""
+    if not _JOBS_DIR.exists():
+        return []
+    jobs = []
+    for f in sorted(_JOBS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime):
+        try:
+            jobs.append(json.loads(f.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return jobs
+
+
+def clear_finished_jobs() -> int:
+    """Remove completed/failed job records. Returns count removed."""
+    if not _JOBS_DIR.exists():
+        return 0
+    removed = 0
+    for f in _JOBS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("status") in ("done", "error"):
+                f.unlink()
+                removed += 1
+        except (json.JSONDecodeError, OSError):
+            continue
+    return removed
+
 
 SPECTRE_MODE_ARGS: dict[str, list[str]] = {
     "spectre": [],
@@ -546,6 +601,26 @@ class SpectreSimulator:
                 "Call shutdown() first to apply the new limit."
             )
 
+    def _run_tracked(self, job_id: str, netlist: Path, params: dict) -> SimulationResult:
+        """Run simulation and update the job registry on completion."""
+        _update_job(job_id, {"status": "running"})
+        try:
+            result = self.run_simulation(netlist, params)
+            _update_job(job_id, {
+                "status": "done" if result.status == ExecutionStatus.SUCCESS else "error",
+                "finished": datetime.now(timezone.utc).isoformat(),
+                "result_status": result.status.value,
+                "errors": result.errors[:3] if result.errors else [],
+            })
+            return result
+        except Exception as exc:
+            _update_job(job_id, {
+                "status": "error",
+                "finished": datetime.now(timezone.utc).isoformat(),
+                "errors": [str(exc)],
+            })
+            raise
+
     def submit(self, netlist: Path, params: dict | None = None) -> Future[SimulationResult]:
         """Submit a simulation to run in the background.
 
@@ -553,6 +628,9 @@ class SpectreSimulator:
         simulation runs in a worker thread — each gets its own remote
         directory (uuid-based), so there are no file conflicts.  The SSH
         ControlMaster connection is shared automatically.
+
+        Job status is written to ``~/.cache/virtuoso_bridge/jobs/`` so that
+        ``virtuoso-bridge sim-jobs`` can display progress from the terminal.
 
         Example::
 
@@ -575,7 +653,21 @@ class SpectreSimulator:
             t3 = sim.submit(Path("tb_sar_logic.scs"))
         """
         pool = self._ensure_pool()
-        return pool.submit(self.run_simulation, Path(netlist), params or {})
+        netlist = Path(netlist).resolve()
+        params = params or {}
+        job_id = uuid.uuid4().hex[:8]
+
+        _write_job(job_id, {
+            "id": job_id,
+            "netlist": netlist.name,
+            "netlist_path": str(netlist),
+            "status": "queued",
+            "submitted": datetime.now(timezone.utc).isoformat(),
+            "finished": None,
+            "profile": self._profile,
+        })
+
+        return pool.submit(self._run_tracked, job_id, netlist, params)
 
     def run_parallel(
         self,
