@@ -437,7 +437,7 @@ def cli_license() -> int:
 
 def cli_sim_jobs() -> int:
     """Show status of submitted Spectre simulations."""
-    from virtuoso_bridge.spectre.runner import read_all_jobs, clear_finished_jobs
+    from virtuoso_bridge.spectre.runner import read_all_jobs
 
     jobs = read_all_jobs()
     if not jobs:
@@ -476,14 +476,6 @@ def cli_sim_jobs() -> int:
     return 0
 
 
-def cli_sim_clear() -> int:
-    """Clear finished/failed job records."""
-    from virtuoso_bridge.spectre.runner import clear_finished_jobs
-    n = clear_finished_jobs()
-    print(f"Cleared {n} finished job(s).")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="virtuoso-bridge")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -499,7 +491,6 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("-p", "--profile", default=None,
                         help="Connection profile (reads VB_*_<profile> env vars)")
     subparsers.add_parser("sim-jobs", help="Show submitted simulation jobs")
-    subparsers.add_parser("sim-clear", help="Clear finished/failed job records")
     return parser
 
 
@@ -514,7 +505,6 @@ def main(argv: list[str] | None = None) -> int:
         "status": cli_status,
         "license": cli_license,
         "sim-jobs": cli_sim_jobs,
-        "sim-clear": cli_sim_clear,
     }
     # Pass profile to commands that support it
     profile = getattr(args, "profile", None)

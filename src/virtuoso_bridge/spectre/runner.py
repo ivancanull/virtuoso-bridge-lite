@@ -49,8 +49,31 @@ def _update_job(job_id: str, updates: dict) -> None:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+_JOB_EXPIRY_SECONDS = 600  # auto-delete finished jobs after 10 minutes
+
+
+def _expire_old_jobs() -> None:
+    """Remove finished job records older than 10 minutes."""
+    if not _JOBS_DIR.exists():
+        return
+    now = datetime.now(timezone.utc)
+    for f in _JOBS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("status") not in ("done", "error"):
+                continue
+            finished = data.get("finished")
+            if finished:
+                dt = now - datetime.fromisoformat(finished)
+                if dt.total_seconds() > _JOB_EXPIRY_SECONDS:
+                    f.unlink()
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+
+
 def read_all_jobs() -> list[dict]:
-    """Read all job records. Used by CLI ``sim-jobs``."""
+    """Read all job records. Auto-expires finished jobs older than 10 min."""
+    _expire_old_jobs()
     if not _JOBS_DIR.exists():
         return []
     jobs = []
@@ -60,22 +83,6 @@ def read_all_jobs() -> list[dict]:
         except (json.JSONDecodeError, OSError):
             continue
     return jobs
-
-
-def clear_finished_jobs() -> int:
-    """Remove completed/failed job records. Returns count removed."""
-    if not _JOBS_DIR.exists():
-        return 0
-    removed = 0
-    for f in _JOBS_DIR.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            if data.get("status") in ("done", "error"):
-                f.unlink()
-                removed += 1
-        except (json.JSONDecodeError, OSError):
-            continue
-    return removed
 
 
 SPECTRE_MODE_ARGS: dict[str, list[str]] = {
