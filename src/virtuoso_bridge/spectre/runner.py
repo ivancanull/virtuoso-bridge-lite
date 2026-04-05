@@ -666,8 +666,12 @@ class SpectreSimulator:
 
     # -- public API ---------------------------------------------------------
 
-    def run_simulation(self, netlist: Path, params: dict) -> SimulationResult:
-        """Run a Spectre simulation on *netlist*."""
+    def run_simulation(self, netlist: Path, params: dict, _job_id: str | None = None) -> SimulationResult:
+        """Run a Spectre simulation on *netlist*.
+
+        Job status is automatically written to ``~/.cache/virtuoso_bridge/jobs/``
+        so that ``virtuoso-bridge sim-jobs`` can display progress.
+        """
         netlist = Path(netlist).resolve()
         if not netlist.exists():
             return SimulationResult(
@@ -675,9 +679,41 @@ class SpectreSimulator:
                 errors=[f"Netlist file not found: {netlist}"],
             )
 
-        if self._remote_host:
-            return self._run_remote(netlist, params)
-        return self._run_local(netlist)
+        # Create job record (unless already created by submit → _run_tracked)
+        job_id = _job_id or uuid.uuid4().hex[:8]
+        if _job_id is None:
+            _write_job(job_id, {
+                "id": job_id,
+                "netlist": netlist.name,
+                "netlist_path": str(netlist),
+                "status": "running",
+                "submitted": datetime.now(timezone.utc).isoformat(),
+                "finished": None,
+                "profile": self._profile,
+                "remote_host": self._remote_host,
+                "remote_user": self._remote_user,
+            })
+
+        try:
+            if self._remote_host:
+                result = self._run_remote(netlist, params)
+            else:
+                result = self._run_local(netlist)
+
+            _update_job(job_id, {
+                "status": "done" if result.status == ExecutionStatus.SUCCESS else "error",
+                "finished": datetime.now(timezone.utc).isoformat(),
+                "result_status": result.status.value,
+                "errors": result.errors[:3] if result.errors else [],
+            })
+            return result
+        except Exception as exc:
+            _update_job(job_id, {
+                "status": "error",
+                "finished": datetime.now(timezone.utc).isoformat(),
+                "errors": [str(exc)],
+            })
+            raise
 
     # -- parallel simulation API ---------------------------------------------
 
@@ -701,30 +737,14 @@ class SpectreSimulator:
             )
 
     def _run_tracked(self, job_id: str, netlist: Path, params: dict) -> SimulationResult:
-        """Run simulation and update the job registry on completion."""
+        """Run simulation via run_simulation, which handles job tracking."""
         _update_job(job_id, {
             "status": "running",
             "remote_host": self._remote_host,
             "remote_user": self._remote_user,
         })
-        try:
-            result = self.run_simulation(netlist, params)
-            # After simulation, try to extract remote_dir from metadata for cancel support
-            remote_dir = (result.metadata or {}).get("remote_dir")
-            _update_job(job_id, {
-                "status": "done" if result.status == ExecutionStatus.SUCCESS else "error",
-                "finished": datetime.now(timezone.utc).isoformat(),
-                "result_status": result.status.value,
-                "errors": result.errors[:3] if result.errors else [],
-            })
-            return result
-        except Exception as exc:
-            _update_job(job_id, {
-                "status": "error",
-                "finished": datetime.now(timezone.utc).isoformat(),
-                "errors": [str(exc)],
-            })
-            raise
+        # Pass job_id so run_simulation skips creating a duplicate job record
+        return self.run_simulation(netlist, params, _job_id=job_id)
 
     def submit(self, netlist: Path, params: dict | None = None) -> Future[SimulationResult]:
         """Submit a simulation to run in the background.
