@@ -248,8 +248,7 @@ If you use virtuoso-bridge in academic work, please cite:
 
 ```bibtex
 @article{zhang2025virtuosobridge,
-  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote and Programmable
-             Cadence Virtuoso Workflows},
+  title   = {Virtuoso-Bridge: An Agent-Native Bridge for Remote Analog and Mixed-Signal Design Automation},
   author  = {Zhang, Zhishuai and Li, Xintian and Sun, Nan and Jie, Lu},
   year    = {2025}
 }
