@@ -564,7 +564,7 @@ def cli_sim_jobs() -> int:
         end = _fmt_time(j.get("finished"))
         dur = _fmt_duration(j)
         err = j.get("errors", [""])[0][:30] if j.get("errors") else ""
-        print(f"\033[31m✗\033[0m {j['id']}  {host:<25s} {j['netlist']:<24s} fail     {start}-{end} {dur} {err}")
+        print(f"\033[31m✗\033[0m {j['id']}  {host:<25s} {j['netlist']:<24s} fail     {start}-{end} {dur}  {err}")
 
     print()
     return 0
