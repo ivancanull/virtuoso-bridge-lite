@@ -14,19 +14,39 @@ from virtuoso_bridge import VirtuosoClient
 
 client = VirtuosoClient.from_env()
 
-tests = []
+passed = 0
+total = 0
+
+
+def check(name, got, expected):
+    global passed, total
+    total += 1
+    got = str(got).strip()
+    expected = str(expected).strip()
+    ok = got == expected
+    passed += ok
+    icon = "PASS" if ok else "FAIL"
+    print(f"  [{icon}] {name}")
+    if not ok:
+        print(f"         got:      {got}")
+        print(f"         expected: {expected}")
+
+
+print(f"\n{'='*60}")
+print(f"Multi-line SKILL Tests")
+print(f"{'='*60}\n")
 
 
 # --- Test 1: simple multiline arithmetic ---
 r = client.execute_skill("(1\n+2\n+3)")
-tests.append(("multiline arithmetic", r.output.strip(), "6"))
+check("multiline arithmetic", r.output, "6")
 
 
 # --- Test 2: sprintf with escaped newlines ---
 r = client.execute_skill("""
 sprintf(nil "line1: %d\\nline2: %d\\nline3: %d" 10 20 30)
 """)
-tests.append(("sprintf multiline string", "line1" in r.output, True))
+check("sprintf multiline string", "line1" in r.output, "True")
 
 
 # --- Test 3: let block with full-line comments ---
@@ -40,7 +60,7 @@ let((a b c)
     c
 )
 """)
-tests.append(("let + full-line comments", r.output.strip(), "30"))
+check("let + full-line comments", r.output, "30")
 
 
 # --- Test 4: for loop with comments ---
@@ -55,7 +75,7 @@ let((result)
     result
 )
 """)
-tests.append(("for loop + comments", r.output.strip(), "55"))
+check("for loop + comments", r.output, "55")
 
 
 # --- Test 5: list operations ---
@@ -68,7 +88,7 @@ let((mylist filtered)
     sprintf(nil "%L" filtered)
 )
 """)
-tests.append(("list filter", "(2 4 6 8 10)" in r.output, True))
+check("list filter", "(2 4 6 8 10)" in r.output, "True")
 
 
 # --- Test 6: string containing semicolons (must NOT be treated as comments) ---
@@ -78,7 +98,7 @@ let((s)
     strlen(s)
 )
 """)
-tests.append(("string with semicolons", r.output.strip(), "18"))
+check("string with semicolons", r.output, "18")
 
 
 # --- Test 7: inline comments ---
@@ -91,7 +111,7 @@ let((a b c d)
     sprintf(nil "a=%d b=%d c=%d d=%d" a b c d)
 )
 """)
-tests.append(("inline comments", "a=100 b=200 c=150 d=15" in r.output, True))
+check("inline comments", "a=100 b=200 c=150 d=15" in r.output, "True")
 
 
 # --- Test 8: procedure definition and call ---
@@ -105,22 +125,8 @@ procedure(_vb_test_add(x y)
 )
 _vb_test_add(17 25)
 """)
-tests.append(("procedure def + call", r.output.strip(), "42"))
+check("procedure def + call", r.output, "42")
 
 
-# --- Results ---
-print(f"\n{'='*60}")
-print(f"Multi-line SKILL Tests")
-print(f"{'='*60}\n")
-
-passed = 0
-for name, got, expected in tests:
-    ok = str(got) == str(expected)
-    icon = "PASS" if ok else "FAIL"
-    passed += ok
-    print(f"  [{icon}] {name}")
-    if not ok:
-        print(f"         got:      {got}")
-        print(f"         expected: {expected}")
-
-print(f"\n{passed}/{len(tests)} passed\n")
+# --- Summary ---
+print(f"\n{passed}/{total} passed\n")
