@@ -290,14 +290,24 @@ def _print_status() -> int:
             ok = vc.test_connection(timeout=5)
             print(f"\n[daemon] {'OK — connected to Virtuoso CIW' if ok else 'NO RESPONSE'}")
             if ok:
-                hostname_result = vc.execute_skill('getHostName()', timeout=5)
-                remote_hostname = (hostname_result.output or "").strip().strip('"')
-                if remote_hostname:
-                    print(f"  hostname : {remote_hostname}")
+                # Query Virtuoso environment info
+                for skill_expr, label in [
+                    ('getHostName()', 'hostname'),
+                    ('getCurrentTime()', 'time'),
+                    ('getVersion()', 'version'),
+                    ('getWorkingDir()', 'workdir'),
+                ]:
+                    try:
+                        r = vc.execute_skill(skill_expr, timeout=5)
+                        val = (r.output or "").strip().strip('"')
+                        if val:
+                            print(f"  {label:<10s}: {val}")
+                    except Exception:
+                        pass
 
-                # Say hello in Virtuoso CIW
+                # Say hello in Virtuoso CIW with timestamp
                 vc.execute_skill(
-                    'printf("\\n  [virtuoso-bridge] Hello from Virtuoso Bridge! Connection OK.\\n\\n")',
+                    r'printf("\n  [virtuoso-bridge] Status check at %s — connection OK.\n\n" getCurrentTime())',
                     timeout=5,
                 )
             if not ok and setup_path:
