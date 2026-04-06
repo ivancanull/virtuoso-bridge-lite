@@ -79,12 +79,12 @@ def main() -> int:
     # 2. Start simulation (background, async)
     session = open_session(client, LIB, CELL)
     t0 = time.time()
-    run_simulation(client, session=session)
-    print(f"[sim] Started ({time.time() - t0:.1f}s)")
+    run_name = run_simulation(client, session=session).strip('"')
+    print(f"[sim] Started: {run_name} ({time.time() - t0:.1f}s)")
 
-    # 3. Wait (poll spectre processes, non-blocking → LSCS parallel)
+    # 3. Wait (poll .rdb file, non-blocking → LSCS parallel)
     print("[sim] Waiting...")
-    wait_until_done(client, timeout=600)
+    wait_until_done(client, run_name, timeout=600)
     print(f"[sim] Done ({time.time() - t0:.1f}s)")
 
     # 4. Close background session

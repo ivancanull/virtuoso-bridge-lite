@@ -256,39 +256,54 @@ def run_simulation(client: VirtuosoClient, *, session: str = "") -> str:
     return _q(client, f'maeRunSimulation({s.strip()})')
 
 
-def wait_until_done(client: VirtuosoClient, timeout: int = 600,
-                    poll_interval: float = 2.0) -> None:
-    """Wait until simulation finishes by polling for spectre processes.
+def wait_until_done(client: VirtuosoClient, run_name: str,
+                    timeout: int = 600, poll_interval: float = 2.0) -> None:
+    """Wait until simulation finishes. Non-blocking — does NOT use maeWaitUntilDone.
 
-    Does NOT use maeWaitUntilDone (which blocks Virtuoso's event loop
-    and prevents LSCS parallel sweep). Instead, polls via SKILL system()
-    to check if spectre processes are still running.
+    Polls the remote filesystem via SKILL for the existence of
+    <run_name>.rdb in the results directory. This file is written by
+    Maestro only after the simulation fully completes (including
+    post-processing and result copying).
+
+    Does not block Virtuoso's event loop → LSCS parallel sweep works.
 
     Args:
+        run_name: run name returned by run_simulation (e.g. "Interactive.2")
         timeout: max seconds to wait
-        poll_interval: seconds between polls (default 2s)
+        poll_interval: seconds between polls
     """
     import time
+
+    # One SKILL call to get the results base directory
+    r = client.execute_skill('''
+let((rd idx)
+  rd = asiGetResultsDir(asiGetCurrentSession())
+  when(rd
+    idx = nindex(rd "/maestro/results/maestro/")
+    when(idx substring(rd 1 idx + strlen("/maestro/results/maestro/") - 1))
+  )
+)
+''')
+    base = (r.output or "").strip('"')
+    if not base or base == "nil":
+        raise RuntimeError("Cannot find results base directory")
+
+    base = base.rstrip("/")
+    # The top-level spectre.out (under psf/<test>/psf/) is written after ALL
+    # sweep points complete. Poll for this file via SSH.
+    done_marker = f"{base}/{run_name}/psf/*/psf/spectre.out"
     start = time.time()
-    seen_running = False
 
+    # Poll via SSH — zero SKILL channel usage during wait
     while True:
-        r = client.execute_skill(
-            'system("pgrep -u $(whoami) -c spectre 2>/dev/null || echo 0")')
-        count = (r.output or "").strip()
-
-        if count and count != "0":
-            seen_running = True
-        else:
-            if seen_running:
-                return  # was running, now stopped → done
-            elif time.time() - start > 10:
-                # Give 10s grace period for spectre to start
-                # If never seen, simulation might have finished instantly
-                return
+        r = client.ssh_runner.run_command(f'ls {done_marker} 2>/dev/null | wc -l')
+        count = r.stdout.strip()
+        if count and int(count) > 0:
+            return
 
         if time.time() - start > timeout:
-            raise TimeoutError(f"Simulation not done after {timeout}s")
+            raise TimeoutError(f"Simulation not done after {timeout}s "
+                               f"(waiting for {rdb_path})")
 
         time.sleep(poll_interval)
 

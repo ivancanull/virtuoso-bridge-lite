@@ -280,20 +280,22 @@ def export_waveform(
     remote_path = f"/tmp/vb_wave_{history}.txt"
 
     # Use OCEAN openResults (not maeOpenResults — they are different contexts).
-    # Get the PSF results directory, then open it with OCEAN.
-    r = client.execute_skill('asiGetResultsDir(asiGetCurrentSession())')
-    results_dir = (r.output or "").strip('"')
+    # Construct PSF path: base/history/psf/analysis
+    # Base comes from asiGetResultsDir, history and analysis are explicit.
+    r = client.execute_skill('''
+let((rd idx)
+  rd = asiGetResultsDir(asiGetCurrentSession())
+  when(rd
+    idx = rexMatchp("/maestro/results/maestro/" rd)
+    when(idx substring(rd 1 idx + strlen("/maestro/results/maestro") - 1))
+  )
+)
+''')
+    base = (r.output or "").strip('"')
+    if not base or base == "nil":
+        raise RuntimeError("Cannot find results base directory")
 
-    # If asiGetResultsDir points to wrong history, construct path manually
-    if history and history not in results_dir:
-        # Replace the history part in the path
-        import re as _re
-        results_dir = _re.sub(
-            r'(Interactive\.\d+|\.tmpADEDir_\w+)',
-            history,
-            results_dir
-        )
-
+    results_dir = f"{base}/{history}/psf/{analysis}"
     client.execute_skill(f'openResults("{results_dir}")')
     client.execute_skill(f'selectResults("{analysis}")')
     client.execute_skill(
