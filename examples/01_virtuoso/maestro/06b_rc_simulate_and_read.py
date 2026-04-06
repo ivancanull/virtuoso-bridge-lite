@@ -76,30 +76,27 @@ def main() -> int:
     # 1. Ensure clean state
     ensure_clean(client)
 
-    # 2. Start simulation (background, async)
-    session = open_session(client, LIB, CELL)
-    t0 = time.time()
-    run_name = run_simulation(client, session=session).strip('"')
-    print(f"[sim] Started: {run_name} ({time.time() - t0:.1f}s)")
-
-    # 3. Wait (poll .rdb file, non-blocking → LSCS parallel)
-    print("[sim] Waiting...")
-    wait_until_done(client, run_name, timeout=600)
-    print(f"[sim] Done ({time.time() - t0:.1f}s)")
-
-    # 4. Close background session
-    close_session(client, session)
-
-    # 5. Open GUI read-only → read results
+    # 2. Open GUI in edit mode (cleaned first, so no lock conflict)
     client.execute_skill(
         f'deOpenCellView("{LIB}" "{CELL}" "maestro" "maestro" nil "r")')
-
+    client.execute_skill('maeMakeEditable()')
     r = client.execute_skill('''
 let((s) s = nil
   foreach(x maeGetSessions() unless(s when(maeGetSetup(?session x) s = x)))
   s)
 ''')
     gui_session = (r.output or "").strip('"')
+    print(f"[gui] Maestro opened (session {gui_session})")
+
+    # 3. Start simulation (in GUI session, async)
+    t0 = time.time()
+    run_name = run_simulation(client).strip('"')
+    print(f"[sim] Started: {run_name} ({time.time() - t0:.1f}s)")
+
+    # 4. Wait (SSH poll spectre.out, non-blocking → LSCS parallel)
+    print("[sim] Waiting...")
+    wait_until_done(client, run_name, timeout=600)
+    print(f"[sim] Done ({time.time() - t0:.1f}s)")
 
     print("\n=== Results ===")
     results = read_results(client, gui_session, lib=LIB, cell=CELL)

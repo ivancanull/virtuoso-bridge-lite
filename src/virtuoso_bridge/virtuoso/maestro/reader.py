@@ -282,20 +282,12 @@ def export_waveform(
     # Use OCEAN openResults (not maeOpenResults — they are different contexts).
     # Construct PSF path: base/history/psf/analysis
     # Base comes from asiGetResultsDir, history and analysis are explicit.
-    r = client.execute_skill('''
-let((rd idx)
-  rd = asiGetResultsDir(asiGetCurrentSession())
-  when(rd
-    idx = rexMatchp("/maestro/results/maestro/" rd)
-    when(idx substring(rd 1 idx + strlen("/maestro/results/maestro") - 1))
-  )
-)
-''')
-    base = (r.output or "").strip('"')
-    if not base or base == "nil":
-        raise RuntimeError("Cannot find results base directory")
+    # Use asiGetResultsDir directly — it returns the full PSF path
+    r = client.execute_skill('asiGetResultsDir(asiGetCurrentSession())')
+    results_dir = (r.output or "").strip('"')
+    if not results_dir or results_dir == "nil":
+        raise RuntimeError("No results directory found")
 
-    results_dir = f"{base}/{history}/psf/{analysis}"
     client.execute_skill(f'openResults("{results_dir}")')
     client.execute_skill(f'selectResults("{analysis}")')
     client.execute_skill(
