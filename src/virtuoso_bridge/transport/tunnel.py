@@ -169,14 +169,17 @@ class SSHClient:
         self._keep_remote_files = keep_remote_files
         self._profile = profile
 
-        self._ssh_runner = SSHRunner(
-            host=remote_host,
-            user=remote_user,
-            jump_host=jump_host,
-            jump_user=jump_user,
-            persistent_shell=True,
-            verbose=True,
-        )
+        if _is_localhost(remote_host):
+            self._ssh_runner = None
+        else:
+            self._ssh_runner = SSHRunner(
+                host=remote_host,
+                user=remote_user,
+                jump_host=jump_host,
+                jump_user=jump_user,
+                persistent_shell=True,
+                verbose=True,
+            )
 
         self._remote_setup_done = False
         self._remote_work_dir: str | None = None
@@ -255,6 +258,8 @@ class SSHClient:
 
     @property
     def is_tunnel_alive(self) -> bool:
+        if self._ssh_runner is None:
+            return False
         return self._ssh_runner.is_tunnel_alive
 
     # -- remote deployment --------------------------------------------------
@@ -480,6 +485,8 @@ class SSHClient:
 
     def close(self) -> None:
         """Close SSH runner without killing the tunnel (it survives for other scripts)."""
+        if self._ssh_runner is None:
+            return
         try:
             self._ssh_runner.close()
         except Exception:
