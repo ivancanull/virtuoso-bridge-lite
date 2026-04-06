@@ -279,13 +279,27 @@ def export_waveform(
 
     remote_path = f"/tmp/vb_wave_{history}.txt"
 
-    client.execute_skill(f'maeOpenResults(?history "{history}")')
+    # Use OCEAN openResults (not maeOpenResults — they are different contexts).
+    # Get the PSF results directory, then open it with OCEAN.
+    r = client.execute_skill('asiGetResultsDir(asiGetCurrentSession())')
+    results_dir = (r.output or "").strip('"')
+
+    # If asiGetResultsDir points to wrong history, construct path manually
+    if history and history not in results_dir:
+        # Replace the history part in the path
+        import re as _re
+        results_dir = _re.sub(
+            r'(Interactive\.\d+|\.tmpADEDir_\w+)',
+            history,
+            results_dir
+        )
+
+    client.execute_skill(f'openResults("{results_dir}")')
     client.execute_skill(f'selectResults("{analysis}")')
     client.execute_skill(
         f'ocnPrint({expression} '
         f'?numberNotation \'scientific ?numSpaces 1 '
         f'?output "{remote_path}")')
-    client.execute_skill('maeCloseResults()')
 
     client.download_file(remote_path, local_path)
     return local_path
