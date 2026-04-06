@@ -25,9 +25,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.maestro import export_waveform
 
 LIB = "PLAYGROUND_LLM"
 # Use timestamp to avoid cell name collisions across runs
@@ -417,6 +419,30 @@ def check_specs(client: VirtuosoClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5c. Export waveforms via export_waveform API
+# ---------------------------------------------------------------------------
+
+def export_waveforms(client: VirtuosoClient, ses: str) -> None:
+    """Export AC magnitude and phase waveforms using export_waveform."""
+    output_dir = Path("output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # AC magnitude (dB)
+    path = export_waveform(client, ses,
+        'dB20(mag(v("/OUT")))',
+        str(output_dir / "rc_ac_mag_db.txt"),
+        analysis="ac")
+    print(f"[export] AC magnitude: {path}")
+
+    # AC phase
+    path = export_waveform(client, ses,
+        'phase(v("/OUT"))',
+        str(output_dir / "rc_ac_phase.txt"),
+        analysis="ac")
+    print(f"[export] AC phase: {path}")
+
+
+# ---------------------------------------------------------------------------
 # 6. Open Maestro GUI with history results
 # ---------------------------------------------------------------------------
 
@@ -492,6 +518,9 @@ def main() -> int:
 
     # 5b. Check spec via Maestro API
     check_specs(client)
+
+    # 5c. Export waveform using export_waveform API
+    export_waveforms(client, ses)
 
     # 6. Open Maestro GUI with latest history
     open_maestro_with_history(client, results_dir)
