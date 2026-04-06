@@ -202,18 +202,18 @@ def handle_external_connection(conn, addr):
 
         # Multi-line SKILL: write to temp file and load() it.
         # This preserves comments (;) which would break single-line flattening.
+        # We wrap the code so the return value is captured in a global variable,
+        # because load() itself only returns t, not the last expression's value.
         tmp_il_path = None
         if "\n" in skill_code or (hasattr(skill_code, 'decode') and b"\n" in skill_code):
             import tempfile
             fd, tmp_il_path = tempfile.mkstemp(suffix=".il", prefix="vb_eval_")
             f = os.fdopen(fd, "w")
-            if isinstance(skill_code, bytes):
-                f.write(skill_code.decode("utf-8"))
-            else:
-                f.write(skill_code)
+            code_str = skill_code.decode("utf-8") if isinstance(skill_code, bytes) else skill_code
+            f.write("_vb_eval_result = progn(\n%s\n)\n" % code_str)
             f.close()
             escaped_path = tmp_il_path.replace("\\", "/")
-            send_code = 'load("%s")\n' % escaped_path
+            send_code = 'load("%s") _vb_eval_result\n' % escaped_path
         else:
             send_code = skill_code
 
