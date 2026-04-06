@@ -102,7 +102,7 @@ client.execute_skill('maeRunSimulation()')
 client.execute_skill("maeWaitUntilDone('All)")
 ```
 
-For the full API (variables, outputs, specs, corners, OCEAN results, history display), read `references/maestro.md`. See `examples/01_virtuoso/maestro/01_rc_filter_sweep.py` for the complete workflow.
+For the full API (variables, outputs, specs, corners, OCEAN results, history display), read `references/maestro.md`. See `examples/01_virtuoso/maestro/04_rc_filter_sweep.py` for the complete workflow.
 
 ## References
 
@@ -146,10 +146,10 @@ Load only when needed — these contain detailed API docs and edge-case guidance
 - `07–10` — delete/clear operations
 
 ### `examples/01_virtuoso/maestro/`
-- `01_rc_filter_sweep.py` — full Maestro workflow: create schematic, AC analysis, parametric sweep, bandwidth spec, display results
-- `02_read_open_maestro.py` — read the currently open maestro window (no open/close)
+- `01_read_open_maestro.py` — read the currently open maestro window (no open/close)
+- `02_gui_open_read_close_maestro.py` — GUI open → read config → close window
 - `03_open_read_close_maestro.py` — background open → read config → close
-- `04_gui_open_read_close_maestro.py` — GUI open → read config → close window
+- `04_rc_filter_sweep.py` — full Maestro workflow: create schematic, AC analysis, parametric sweep, bandwidth spec, display results
 
 ## Related skills
 
