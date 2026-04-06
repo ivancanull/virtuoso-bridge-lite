@@ -256,18 +256,41 @@ def run_simulation(client: VirtuosoClient, *, session: str = "") -> str:
     return _q(client, f'maeRunSimulation({s.strip()})')
 
 
-def wait_until_done(client: VirtuosoClient, timeout: int = 600) -> str:
-    """Wait until simulation finishes.
+def wait_until_done(client: VirtuosoClient, timeout: int = 600,
+                    poll_interval: float = 2.0) -> None:
+    """Wait until simulation finishes by polling for spectre processes.
 
-    Uses maeWaitUntilDone('All) which blocks the SKILL channel until
-    all simulations complete.
+    Does NOT use maeWaitUntilDone (which blocks Virtuoso's event loop
+    and prevents LSCS parallel sweep). Instead, polls via SKILL system()
+    to check if spectre processes are still running.
 
-    IMPORTANT: Only works when maestro is opened in GUI mode
-    (deOpenCellView + maeMakeEditable). In background sessions
-    (maeOpenSetup), this returns immediately without waiting.
+    Args:
+        timeout: max seconds to wait
+        poll_interval: seconds between polls (default 2s)
     """
-    return client.execute_skill(
-        "maeWaitUntilDone('All)", timeout=timeout).output or ""
+    import time
+    start = time.time()
+    seen_running = False
+
+    while True:
+        r = client.execute_skill(
+            'system("pgrep -u $(whoami) -c spectre 2>/dev/null || echo 0")')
+        count = (r.output or "").strip()
+
+        if count and count != "0":
+            seen_running = True
+        else:
+            if seen_running:
+                return  # was running, now stopped → done
+            elif time.time() - start > 10:
+                # Give 10s grace period for spectre to start
+                # If never seen, simulation might have finished instantly
+                return
+
+        if time.time() - start > timeout:
+            raise TimeoutError(f"Simulation not done after {timeout}s")
+
+        time.sleep(poll_interval)
 
 
 # ---------------------------------------------------------------------------

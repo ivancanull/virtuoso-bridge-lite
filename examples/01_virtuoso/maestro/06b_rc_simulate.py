@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Step 2: Run simulation on the RC filter Maestro setup.
+"""Step 2: Run simulation and wait for completion.
 
 Prerequisite: run 06a_rc_create.py first.
 After this completes, use 06c_rc_read_results.py to read results.
 
-NOTE: Must open Maestro in GUI mode (deOpenCellView + maeMakeEditable)
-for maeWaitUntilDone to work. Background sessions (maeOpenSetup) return
-immediately from maeWaitUntilDone, causing the simulation to be canceled
-when the session closes.
+Uses non-blocking polling (checks spectre processes) so LSCS can
+run sweep points in parallel. Does NOT block Virtuoso's event loop.
 """
 
 import sys
@@ -17,7 +15,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.maestro import save_setup
+from virtuoso_bridge.virtuoso.maestro import (
+    open_session, close_session, run_simulation, wait_until_done,
+)
 
 LIB = "PLAYGROUND_LLM"
 CELL = "TB_RC_FILTER"
@@ -27,23 +27,19 @@ def main() -> int:
     client = VirtuosoClient.from_env()
     print(f"[info] {LIB}/{CELL}")
 
-    # Must use GUI mode for maeWaitUntilDone to block properly
-    client.execute_skill(
-        f'deOpenCellView("{LIB}" "{CELL}" "maestro" "maestro" nil "r")')
-    client.execute_skill('maeMakeEditable()')
+    session = open_session(client, LIB, CELL)
 
-    print("[sim] Running...")
     t0 = time.time()
-    r = client.execute_skill('maeRunSimulation()')
-    run_name = (r.output or "").strip('"')
-    print(f"[sim] Started: {run_name}")
+    print("[sim] Starting...")
+    run_simulation(client, session=session)
+    print("[sim] Waiting (polling spectre processes)...")
+    wait_until_done(client, timeout=600)
+    elapsed = time.time() - t0
+    print(f"[sim] Done ({elapsed:.1f}s)")
 
-    client.execute_skill("maeWaitUntilDone('All)", timeout=600)
-    print(f"[sim] Done ({time.time() - t0:.1f}s)")
-
-    # Save so results persist after closing
-    save_setup(client, LIB, CELL)
-
+    # Wait a few seconds for results to be written to disk
+    time.sleep(3)
+    close_session(client, session)
     return 0
 
 

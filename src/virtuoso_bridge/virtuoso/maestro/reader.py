@@ -129,16 +129,16 @@ def read_results(client: VirtuosoClient, session: str) -> dict[str, tuple[str, s
     def q(label, expr):
         return _q(client, label, expr)
 
-    # Find history name from asiGetResultsDir
+    # Find latest history from asiGetResultsDir
     history_expr = 'asiGetResultsDir(asiGetCurrentSession())'
     _, results_dir = q("asiGetResultsDir", history_expr)
     results_dir_str = results_dir.strip('"')
     latest_history = ""
-    m = re.search(r'/maestro/results/maestro/([^/]+)/', results_dir_str)
+    m = re.search(r'/maestro/results/maestro/(Interactive\.\d+)/', results_dir_str)
     if m:
         latest_history = m.group(1)
 
-    if not latest_history:
+    if not latest_history or "tmpADE" in latest_history:
         return {}
 
     # Open results
