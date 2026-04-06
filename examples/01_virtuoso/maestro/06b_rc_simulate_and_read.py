@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
 from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.maestro import (
-    read_results, export_waveform, save_setup,
+    read_results, export_waveform, save_setup, wait_until_done,
 )
 
 LIB = "PLAYGROUND_LLM"
@@ -64,44 +64,16 @@ t
     client.execute_skill('maeMakeEditable()')
     print("[gui] Maestro opened")
 
-    # 3. Set up completion callback + start simulation
-    marker = "/tmp/vb_sim_done_marker"
-    client.execute_skill(f'''
-; Remove old marker
-when(isFile("{marker}") deleteFile("{marker}"))
-
-; Register alarm-based callback: check every second, write marker when done
-procedure(_vbCheckSimDone()
-  let((status)
-    status = maeGetOverallSpecStatus()
-    if(status then
-      let((port)
-        port = outfile("{marker}")
-        fprintf(port "done %s\\n" getCurrentTime())
-        close(port)
-        printf("[%s sim] Finished\\n" nth(2 parseString(getCurrentTime())))
-      )
-    else
-      alarm(1 '_vbCheckSimDone)
-    )
-  )
-)
-t
-''')
-
+    # 3. Start simulation + wait
+    client.execute_skill('errset(maeCloseResults())')  # clear stale results
     t0 = time.time()
     r = client.execute_skill('maeRunSimulation()')
     run_name = (r.output or "").strip('"')
     print(f"[sim] Started: {run_name}")
 
-    # Start the alarm checker
-    client.execute_skill('alarm(1 \'_vbCheckSimDone)')
-
-    # 4. Wait via SSH for marker file (one command, zero SKILL channel usage)
-    print("[sim] Waiting (callback)...")
-    client.ssh_runner.run_command(
-        f'bash -c "while [ ! -f {marker} ]; do sleep 1; done"',
-        timeout=600)
+    # 4. Poll maeGetResultOutputs (non-blocking, ~100ms per call, LSCS parallel)
+    print("[sim] Waiting...")
+    wait_until_done(client, timeout=600)
     print(f"[sim] Done ({time.time() - t0:.1f}s)")
 
     # 5. Find session

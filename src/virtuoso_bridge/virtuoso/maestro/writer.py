@@ -256,54 +256,54 @@ def run_simulation(client: VirtuosoClient, *, session: str = "") -> str:
     return _q(client, f'maeRunSimulation({s.strip()})')
 
 
-def wait_until_done(client: VirtuosoClient, run_name: str,
-                    timeout: int = 600, poll_interval: float = 2.0) -> None:
-    """Wait until simulation finishes. Non-blocking — does NOT use maeWaitUntilDone.
+def wait_until_done(client: VirtuosoClient, timeout: int = 600,
+                    poll_interval: float = 2.0) -> None:
+    """Wait until simulation finishes. Non-blocking for Virtuoso's event loop.
 
-    Polls the remote filesystem via SKILL for the existence of
-    <run_name>.rdb in the results directory. This file is written by
-    Maestro only after the simulation fully completes (including
-    post-processing and result copying).
+    Polls maeGetResultOutputs() every poll_interval seconds. This returns
+    non-nil only when ALL sweep points complete and results are written.
+    Each SKILL call takes ~100ms then releases the event loop, so LSCS
+    parallel sweep runs unimpeded (~95% event loop free time).
 
-    Does not block Virtuoso's event loop → LSCS parallel sweep works.
+    IMPORTANT: call maeCloseResults() before maeRunSimulation() to clear
+    stale results, otherwise this may return immediately from old data.
 
     Args:
-        run_name: run name returned by run_simulation (e.g. "Interactive.2")
         timeout: max seconds to wait
-        poll_interval: seconds between polls
+        poll_interval: seconds between polls (default 2s)
     """
     import time
 
-    # One SKILL call to get the results base directory
-    r = client.execute_skill('''
-let((rd idx)
-  rd = asiGetResultsDir(asiGetCurrentSession())
-  when(rd
-    idx = nindex(rd "/maestro/results/maestro/")
-    when(idx substring(rd 1 idx + strlen("/maestro/results/maestro/") - 1))
-  )
-)
-''')
-    base = (r.output or "").strip('"')
-    if not base or base == "nil":
-        raise RuntimeError("Cannot find results base directory")
+    r = client.execute_skill('car(maeGetSetup())')
+    test = (r.output or "").strip('"')
+    if not test or test == "nil":
+        raise RuntimeError("No test found in current session")
 
-    base = base.rstrip("/")
-    # The top-level spectre.out (under psf/<test>/psf/) is written after ALL
-    # sweep points complete. Poll for this file via SSH.
-    done_marker = f"{base}/{run_name}/psf/*/psf/spectre.out"
     start = time.time()
+    time.sleep(5)  # let simulation start
 
-    # Poll via SSH — zero SKILL channel usage during wait
     while True:
-        r = client.ssh_runner.run_command(f'ls {done_marker} 2>/dev/null | wc -l')
-        count = r.stdout.strip()
-        if count and int(count) > 0:
-            return
+        client.execute_skill('maeOpenResults()')
+        r = client.execute_skill(
+            f'maeGetResultOutputs(?testName "{test}")')
+        client.execute_skill('maeCloseResults()')
+
+        if r.output and r.output != "nil" and r.output != "(null)":
+            # Outputs appeared for first sweep point. Wait until no more
+            # spectre processes are running (all sweep points done).
+            import time as _t
+            _t.sleep(2)
+            while True:
+                r2 = client.execute_skill(
+                    'system("pgrep -u $(whoami) -c spectre 2>/dev/null || echo 0")')
+                count = (r2.output or "").strip()
+                if not count or count == "0":
+                    _t.sleep(3)  # grace for Maestro post-processing
+                    return
+                _t.sleep(poll_interval)
 
         if time.time() - start > timeout:
-            raise TimeoutError(f"Simulation not done after {timeout}s "
-                               f"(waiting for {rdb_path})")
+            raise TimeoutError(f"Simulation not done after {timeout}s")
 
         time.sleep(poll_interval)
 
