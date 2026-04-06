@@ -50,9 +50,6 @@ LIB = "PLAYGROUND_LLM"
 CELL = "TB_RC_FILTER_" + __import__("time").strftime("%m%d_%H%M%S")
 C_VALUES = ["1p", "100f"]   # comma-separated in Maestro for parametric sweep
 
-REMOTE_TMP = "/tmp/rc_filter_ac"
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -75,88 +72,17 @@ def set_cdf_param(client: VirtuosoClient, cv_var: str, inst_name: str,
         raise RuntimeError(f"Failed to set {inst_name}.{param}: {r.errors[0]}")
 
 
-def parse_ocnprint_sets(text: str) -> dict[str, list[tuple[float, float]]]:
-    """Parse ocnPrint output into per-sweep-value datasets.
-
-    Handles two formats that Maestro produces:
-
-    1. **Column format** (parametric sweep) — one header row with sweep
-       values, then freq + N columns of data side by side::
-
-           freq (Hz)      dB20(...) dB20(...)
-           c_val          1.000e-13 1.000e-12
-           1.00000e+00    0.00e+00  0.00e+00
-
-    2. **Set format** (corners / sequential runs) — separate blocks::
-
-           # Set No. 1
-           (c_val = 1.000e-12)
-           freq (Hz)  dB20(...)
-           1.00e+00   0.00e+00
-
-    Returns ``{sweep_value_str: [(freq, value), ...]}``.
-    """
-    lines = text.strip().splitlines()
-
-    # --- Detect column format (sweep values on a header line) ---
-    sweep_values: list[str] = []
-    data_start = 0
-    for i, line in enumerate(lines):
-        parts = line.split()
-        if not parts:
-            continue
-        if parts[0].isidentifier() and len(parts) >= 2:
+def parse_wave_file(path: str) -> list[tuple[float, float]]:
+    """Parse an ocnPrint text file into (x, y) pairs."""
+    pairs = []
+    for line in Path(path).read_text().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2:
             try:
-                vals = [float(p) for p in parts[1:]]
-                sweep_values = [p for p in parts[1:]]
-                data_start = i + 1
-                break
+                pairs.append((float(parts[0]), float(parts[1])))
             except ValueError:
                 continue
-
-    if sweep_values:
-        result: dict[str, list[tuple[float, float]]] = {
-            sv: [] for sv in sweep_values
-        }
-        for line in lines[data_start:]:
-            parts = line.split()
-            if not parts:
-                continue
-            try:
-                freq = float(parts[0])
-            except ValueError:
-                continue
-            for j, sv in enumerate(sweep_values):
-                if j + 1 < len(parts):
-                    try:
-                        result[sv].append((freq, float(parts[j + 1])))
-                    except ValueError:
-                        pass
-        return result
-
-    # --- Fallback: Set format ---
-    result = {}
-    blocks = re.split(r"# Set No\.\s*\d+\s*\n", text)
-    for block in blocks:
-        block = block.strip()
-        if not block:
-            continue
-        m = re.match(r"\((\w+)\s*=\s*([\d.eE+-]+)\)", block)
-        label = m.group(2) if m else "unknown"
-        pairs: list[tuple[float, float]] = []
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("(") or line.startswith("freq"):
-                continue
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    pairs.append((float(parts[0]), float(parts[1])))
-                except ValueError:
-                    continue
-        if pairs:
-            result[label] = pairs
-    return result
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -246,8 +172,8 @@ def create_maestro(client: VirtuosoClient) -> str:
 # 3. Run simulation
 # ---------------------------------------------------------------------------
 
-def run_sim(client: VirtuosoClient, session: str) -> str:
-    """Run simulation and return the results directory."""
+def run_sim(client: VirtuosoClient, session: str) -> None:
+    """Run simulation and wait for completion."""
     print("[sim] Running AC simulation...")
 
     elapsed, _ = timed_call(lambda: (
@@ -255,99 +181,55 @@ def run_sim(client: VirtuosoClient, session: str) -> str:
         wait_until_done(client, timeout=300),
     ))
 
-    # Get results directory
-    r = skill(client, "asiGetResultsDir(asiGetCurrentSession())")
-    results_dir = r.output.strip('"')
-
-    # .tmpADEDir means results are under a numbered Interactive.N directory
-    if ".tmpADEDir" in results_dir:
-        base = results_dir.split(".tmpADEDir")[0]
-        r = client.run_shell_command(
-            f"ls -1d {base}Interactive.*/psf/AC 2>/dev/null | tail -1"
-        )
-        alt = r.output.strip() if r.output else ""
-        if alt and "Interactive" in alt:
-            results_dir = alt
-
     print(f"[sim] Complete  [{format_elapsed(elapsed)}]")
-    print(f"[sim] Results: {results_dir}")
-    return results_dir
 
 
 # ---------------------------------------------------------------------------
-# 4. Read results via OCEAN
+# 4. Export + parse waveform data
 # ---------------------------------------------------------------------------
 
-def read_results_ocean(client: VirtuosoClient,
-                       results_dir: str) -> dict[str, list[tuple[float, float]]]:
-    """Read AC magnitude via OCEAN and return per-sweep-value data."""
-    remote_file = f"{REMOTE_TMP}_db.txt"
-    local_file = Path("output/rc_filter_sweep_db.txt")
-    local_file.parent.mkdir(parents=True, exist_ok=True)
+def read_waveform_data(client: VirtuosoClient, session: str) -> list[tuple[float, float]]:
+    """Export AC magnitude via export_waveform and parse locally."""
+    output_dir = Path("output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    local_file = str(output_dir / "rc_filter_sweep_db.txt")
 
-    skill(client, f'openResults("{results_dir}")')
-    skill(client, 'selectResults("ac")')
+    export_waveform(client, session,
+        'dB20(mag(v("/OUT")))', local_file, analysis="ac")
 
-    r = skill(client, "outputs()")
-    print(f"[read] Outputs: {r.output}")
-
-    r = skill(client, "sweepNames()")
-    print(f"[read] Sweeps: {r.output}")
-
-    # Export dB20(mag(V(/OUT))) — includes all sweep sets
-    skill(client,
-          f'ocnPrint(dB20(mag(v("/OUT"))) '
-          f'?numberNotation (quote scientific) ?numSpaces 1 '
-          f'?output "{remote_file}")')
-    client.download_file(remote_file, str(local_file))
-
-    text = local_file.read_text()
-    datasets = parse_ocnprint_sets(text)
-    for label, data in datasets.items():
-        print(f"[read] c_val={label}: {len(data)} points")
-    print(f"[read] Saved to {local_file}")
-    return datasets
+    data = parse_wave_file(local_file)
+    print(f"[read] {len(data)} points, saved to {local_file}")
+    return data
 
 
 # ---------------------------------------------------------------------------
 # 5. Compare
 # ---------------------------------------------------------------------------
 
-def compare_results(datasets: dict[str, list[tuple[float, float]]]) -> None:
-    """Print a comparison table and estimate -3 dB frequencies."""
+def compare_results(data: list[tuple[float, float]]) -> None:
+    """Print key frequencies and estimate -3 dB frequency."""
     freqs_of_interest = [1e6, 1e7, 1e8, 1e9, 1e10]
 
-    labels = list(datasets.keys())
-    header = "freq (Hz)".ljust(14)
-    for label in labels:
-        header += f"c_val={label}".rjust(16)
-    print(f"\n{'=' * len(header)}")
-    print(header)
-    print(f"{'=' * len(header)}")
+    print(f"\n{'=' * 30}")
+    print("freq (Hz)       gain (dB)")
+    print(f"{'=' * 30}")
 
     for target_freq in freqs_of_interest:
-        line = f"{target_freq:<14.2e}"
-        for label in labels:
-            data = datasets[label]
-            closest = min(data, key=lambda p: abs(p[0] - target_freq))
-            line += f"{closest[1]:>13.2f} dB"
-        print(line)
+        closest = min(data, key=lambda p: abs(p[0] - target_freq))
+        print(f"{target_freq:<14.2e}  {closest[1]:>8.2f} dB")
 
     print(f"\n--- Estimated -3 dB frequency ---")
-    for label in labels:
-        data = datasets[label]
-        for i, (f, db) in enumerate(data):
-            if db <= -3.0:
-                if i > 0:
-                    f_prev, db_prev = data[i - 1]
-                    ratio = (-3.0 - db_prev) / (db - db_prev)
-                    f_3db = f_prev + ratio * (f - f_prev)
-                else:
-                    f_3db = f
-                print(f"  c_val={label}:  f_3dB = {f_3db:.3e} Hz")
-                break
-        else:
-            print(f"  c_val={label}:  -3 dB not reached in range")
+    for i, (f, db) in enumerate(data):
+        if db <= -3.0:
+            if i > 0:
+                f_prev, db_prev = data[i - 1]
+                ratio = (-3.0 - db_prev) / (db - db_prev)
+                f_3db = f_prev + ratio * (f - f_prev)
+            else:
+                f_3db = f
+            print(f"  f_3dB = {f_3db:.3e} Hz")
+            return
+    print("  -3 dB not reached in range")
 
 
 # ---------------------------------------------------------------------------
@@ -393,24 +275,17 @@ def export_waveforms(client: VirtuosoClient, session: str) -> None:
 # 6. Open Maestro GUI with history results
 # ---------------------------------------------------------------------------
 
-def open_maestro_with_history(client: VirtuosoClient,
-                              results_dir: str) -> None:
+def open_maestro_with_history(client: VirtuosoClient) -> None:
     """Open the Maestro GUI and display the latest simulation history."""
-    # Find history names from results directory
-    m = re.match(r"(.*/maestro/results/maestro/)", results_dir)
+    # Get results dir to find history name
+    r = skill(client, "asiGetResultsDir(asiGetCurrentSession())")
+    rd = (r.output or "").strip('"')
+    m = re.search(r'/maestro/results/maestro/([^/]+)/', rd)
     if not m:
-        print("[open] Cannot determine results base directory")
+        print("[open] No simulation history found")
         return
-    base = m.group(1)
-    r = skill(client, f'getDirFiles("{base}")')
-    dirs = r.output.strip("()").replace('"', "").split() if r.output else []
-    histories = sorted([d for d in dirs if not d.startswith(".")])
-    if not histories:
-        print("[open] No histories found")
-        return
-    latest = histories[-1]
-    print(f"[open] Available histories: {histories}")
-    print(f"[open] Opening: {latest}")
+    latest = m.group(1)
+    print(f"[open] Opening history: {latest}")
 
     # Open GUI → editable → restore → save
     skill(client,
@@ -435,28 +310,28 @@ def main() -> int:
     # 2. Create Maestro with AC + sweep
     session = create_maestro(client)
 
-    # 3. Run
-    results_dir = run_sim(client, session)
+    # 3. Run simulation
+    run_sim(client, session)
 
-    # 4. Read results via OCEAN
-    datasets = read_results_ocean(client, results_dir)
+    # 4. Export + parse waveform data
+    data = read_waveform_data(client, session)
 
     # 5. Compare
-    if datasets:
-        compare_results(datasets)
+    if data:
+        compare_results(data)
     else:
-        print("[warn] No result sets found — check simulation output")
+        print("[warn] No waveform data — check simulation output")
         return 1
 
     # 5b. Check spec via Maestro API
     check_specs(client, session)
 
-    # 5c. Export waveforms
+    # 5c. Export additional waveforms (phase)
     export_waveforms(client, session)
 
     # 6. Open Maestro GUI with latest history
     close_session(client, session)
-    open_maestro_with_history(client, results_dir)
+    open_maestro_with_history(client)
 
     return 0
 
