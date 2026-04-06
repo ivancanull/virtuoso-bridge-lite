@@ -186,4 +186,4 @@ Sample files in `references/netlist_samples/` — a 2-stage RC low-pass cascade 
 
 - `examples/01_virtuoso/schematic/02_read_connectivity.py` — read schematic connectivity via SKILL
 - `examples/01_virtuoso/schematic/08_import_cdl_cap_array.py` — CDL → spiceIn import
-- `examples/01_virtuoso/ade/01_rc_filter_sweep.py` — includes Spectre netlist export via maeCreateNetlistForCorner
+- `examples/01_virtuoso/maestro/01_rc_filter_sweep.py` — includes Spectre netlist export via maeCreateNetlistForCorner

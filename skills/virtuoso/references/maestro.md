@@ -492,28 +492,9 @@ client.execute_skill(
 client.download_file('/tmp/results.csv', 'output/results.csv')
 ```
 
-## Maestro SKILL Utilities
-
-`examples/01_virtuoso/assets/maestro_utils.il` provides helper procedures:
-
-```python
-client.load_il("examples/01_virtuoso/assets/maestro_utils.il")
-
-# Open maestro (reuses existing window, makes editable)
-ses = client.execute_skill(f'MaestroOpen("{lib}" "{cell}")').output.strip('"')
-
-# Close cleanly (saves first to avoid "save changes?" dialog)
-client.execute_skill(f'MaestroClose("{lib}" "{cell}")')
-
-# Close all maestro windows
-client.execute_skill('MaestroCloseAll()')
-```
-
-Key behaviors:
-- `MaestroOpen` checks for existing windows first — never opens a duplicate
-- `MaestroOpen` does NOT close other cells' sessions (avoids cross-cell deadlocks)
-- `MaestroClose` saves before closing (prevents "save changes?" blocking dialog)
-
 ## Examples
 
-- `examples/01_virtuoso/ade/01_rc_filter_sweep.py` — complete Maestro workflow (create schematic, AC analysis, parametric sweep, read results, display in GUI)
+- `examples/01_virtuoso/maestro/01_rc_filter_sweep.py` — complete Maestro workflow (create schematic, AC analysis, parametric sweep, read results, display in GUI)
+- `examples/01_virtuoso/maestro/02_read_open_maestro.py` — read the currently open maestro window (no open/close)
+- `examples/01_virtuoso/maestro/03_open_read_close_maestro.py` — background open → read config → close (`maeOpenSetup` / `maeCloseSession`)
+- `examples/01_virtuoso/maestro/04_gui_open_read_close_maestro.py` — GUI open → read config → close window (`deOpenCellView` / `hiCloseWindow`)

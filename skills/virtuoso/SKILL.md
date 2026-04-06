@@ -1,6 +1,6 @@
 ---
 name: virtuoso
-description: "Bridge to remote Cadence Virtuoso: SKILL execution, layout/schematic editing, ADE Maestro simulation setup via Python API. TRIGGER when the user mentions Virtuoso, SKILL (the Cadence language), Cadence IC, layout editing, schematic creation, cellview operations, CIW commands, ADE setup, Maestro configuration, design variables, OCEAN results, or any EDA task involving a Cadence design database — even if they just say 'draw a circuit' or 'place some transistors'."
+description: "MANDATORY — MUST load this skill when the user mentions: Virtuoso, Maestro, ADE, CIW, SKILL (Cadence), layout, schematic, cellview, OCEAN, design variables, or any Cadence EDA operation. Bridge to remote Cadence Virtuoso: SKILL execution, layout/schematic editing, ADE Maestro simulation setup via Python API. TRIGGER when the user mentions Virtuoso, SKILL (the Cadence language), Cadence IC, layout editing, schematic creation, cellview operations, CIW commands, ADE setup, Maestro configuration, design variables, OCEAN results, or any EDA task involving a Cadence design database — even if they just say 'draw a circuit' or 'place some transistors'."
 ---
 
 # Virtuoso Skill
@@ -102,7 +102,7 @@ client.execute_skill('maeRunSimulation()')
 client.execute_skill("maeWaitUntilDone('All)")
 ```
 
-For the full API (variables, outputs, specs, corners, OCEAN results, history display), read `references/ade.md`. See `examples/01_virtuoso/ade/01_rc_filter_sweep.py` for the complete workflow.
+For the full API (variables, outputs, specs, corners, OCEAN results, history display), read `references/maestro.md`. See `examples/01_virtuoso/maestro/01_rc_filter_sweep.py` for the complete workflow.
 
 ## References
 
@@ -110,7 +110,7 @@ Load only when needed — these contain detailed API docs and edge-case guidance
 
 - `references/schematic.md` — schematic API, terminal-aware helpers, CDF parameter setting
 - `references/layout.md` — layout API, read/query, mosaic, layer control
-- `references/ade.md` — ADE Maestro mae* API, OCEAN results, corners, simulation control
+- `references/maestro.md` — ADE Maestro mae* API, OCEAN results, corners, simulation control
 - `references/netlist.md` — CDL/Spectre netlist formats, spiceIn import, netlist export
 
 ## Existing examples
@@ -142,8 +142,11 @@ Load only when needed — these contain detailed API docs and edge-case guidance
 - `06_read_layout.py` — read layout shapes
 - `07–10` — delete/clear operations
 
-### `examples/01_virtuoso/ade/`
+### `examples/01_virtuoso/maestro/`
 - `01_rc_filter_sweep.py` — full Maestro workflow: create schematic, AC analysis, parametric sweep, bandwidth spec, display results
+- `02_read_open_maestro.py` — read the currently open maestro window (no open/close)
+- `03_open_read_close_maestro.py` — background open → read config → close
+- `04_gui_open_read_close_maestro.py` — GUI open → read config → close window
 
 ## Related skills
 
