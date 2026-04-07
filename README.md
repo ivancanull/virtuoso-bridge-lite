@@ -21,29 +21,23 @@ Control Cadence Virtuoso from anywhere, locally or remotely. Verified across mac
 
 ### Why use this?
 
-**1. Three ways to program Virtuoso** — from raw SKILL to Pythonic APIs, your choice.
-- **Load entire `.il` files**: hot-load complex SKILL scripts into Virtuoso with one call, then invoke their functions from Python
-- **Execute any SKILL expression**: `client.execute_skill('dbOpenCellViewByType(...)')` for full Virtuoso API access
-- **Python APIs**: high-level wrappers for layout, schematic, and Spectre simulation when you don't want to write SKILL
+**1. Full Virtuoso control** — Three levels of SKILL interaction, four design domains.
+- **Three ways to program**: load `.il` files, execute inline SKILL, or use Python APIs — your choice
+- **Schematic**: create circuits, wire instances, read connectivity, import CDL
+- **Layout**: shapes, vias, routing, read-back geometry, mosaic arrays
+- **Maestro (ADE Assembler)**: read/write simulation setups, run simulations with non-blocking completion detection, collect results and export waveforms
+- **Spectre**: standalone netlist-driven simulation with PSF result parsing
 
-**2. AI-native design** — Built for coding agents (Claude Code, Cursor, etc.) to drive.
-- CLI-first: agents control the bridge via `virtuoso-bridge start/status/restart`, no GUI needed
-- Ships with agent skill files (`skills/`) so the agent knows how to use the bridge immediately
-- Persistent SSH tunnel stays alive across calls for high-frequency agent interactions
-- All commands logged for full traceability
+**2. Multi-server, multi-user** — One machine controls multiple Virtuoso instances simultaneously.
+- Multi-profile SSH: connect to N design servers, each with independent tunnel
+- Run parallel simulations across servers and accounts
+- Foundation for scaling analog design automation across teams and compute resources
 
-**3. Multi-server, multi-user** — One agent controls multiple Virtuoso instances simultaneously.
-- Multi-profile SSH: connect to N design servers from a single machine, each with independent tunnel
-- Run parallel simulations across servers to maximize throughput
-- Foundation for AI-driven analog design automation at scale
-
-**4. Full Maestro (ADE Assembler) automation** — Read, modify, simulate, and collect results programmatically.
-- Read existing simulation setups (analyses, outputs, variables, corners, environment)
-- Modify any configuration (tests, analyses, specs, model files, sweep parameters)
-- Run simulation with non-blocking completion detection (zero event loop blocking, LSCS parallel)
-- Collect scalar results, spec pass/fail, yield, and export waveform data
-
-**5. Batteries included** — Layout, schematic, Maestro, and Spectre examples ready to run.
+**3. AI-native** — Built for coding agents (Claude Code, Cursor, etc.) to drive Virtuoso.
+- CLI-first: `virtuoso-bridge start/status/restart`, no GUI needed
+- Ships with agent skill files (`skills/`) — the agent knows how to use the bridge immediately
+- Persistent SSH tunnel for high-frequency agent interactions
+- All SKILL commands logged with timestamps to CIW for full traceability
 
 > **If you are an AI agent**, read [`AGENTS.md`](AGENTS.md) first and follow its setup checklist.
 
