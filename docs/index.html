@@ -218,25 +218,21 @@ bridge.<span class="fn">execute_skill</span>(<span class="str">"1+2"</span>)</co
 
     <div class="api-group">
       <h3>Layout editing</h3>
-      <pre><code><span class="kw">with</span> client.layout.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> layout:
-    layout.<span class="fn">add_rect</span>(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, (0, 0, 1, 0.5))
-    layout.<span class="fn">add_path</span>(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], width=0.1)
-    layout.<span class="fn">add_label</span>(<span class="str">"M1"</span>, <span class="str">"pin"</span>, (0.5, 0.25), <span class="str">"VDD"</span>)
-    layout.<span class="fn">add_polygon</span>(<span class="str">"M3"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0),(1,1)])
-    layout.<span class="fn">add_instance</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), <span class="str">"M0"</span>)
-    layout.<span class="fn">add_via</span>(<span class="str">"M1_M2"</span>, (0.5, 0.25))
-    layout.<span class="fn">add_mosaic</span>(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, (0,0), rows=2, cols=4)
-    shapes = layout.<span class="fn">get_shapes</span>()</code></pre>
+      <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.layout <span class="kw">import</span> (
+    layout_create_rect <span class="kw">as</span> rect,
+    layout_create_path <span class="kw">as</span> path,
+    layout_create_param_inst <span class="kw">as</span> inst,
+    layout_create_via_by_name <span class="kw">as</span> via,
+)
+
+<span class="kw">with</span> client.layout.<span class="fn">edit</span>(<span class="str">"myLib"</span>, <span class="str">"myCell"</span>) <span class="kw">as</span> lay:
+    lay.<span class="fn">add</span>(rect(<span class="str">"M1"</span>, <span class="str">"drawing"</span>, 0, 0, 1, 0.5))
+    lay.<span class="fn">add</span>(path(<span class="str">"M2"</span>, <span class="str">"drawing"</span>, [(0,0),(1,0)], 0.1))
+    lay.<span class="fn">add</span>(inst(<span class="str">"tsmcN28"</span>, <span class="str">"nch_ulvt_mac"</span>, <span class="str">"layout"</span>, <span class="str">"M0"</span>, 0, 0, <span class="str">"R0"</span>))
+    lay.<span class="fn">add</span>(via(<span class="str">"M1_M2"</span>, 0.5, 0.25))</code></pre>
       <table>
         <tr><th>Method</th><th>Description</th></tr>
-        <tr><td><code>layout.read_geometry(lib, cell)</code></td><td>Read all shapes and instances as dicts</td></tr>
-        <tr><td><code>layout.list_shapes(lib, cell)</code></td><td>Shape summary</td></tr>
-        <tr><td><code>layout.fit_view()</code></td><td>Fit view to all geometry</td></tr>
-        <tr><td><code>layout.show_only_layers(["M1","M2"])</code></td><td>Show only specified layers</td></tr>
-        <tr><td><code>layout.clear_routing()</code></td><td>Delete routing metals, keep instances</td></tr>
-        <tr><td><code>layout.clear_current()</code></td><td>Delete all shapes</td></tr>
-        <tr><td><code>layout.delete_shapes_on_layer(...)</code></td><td>Delete shapes on specific layer</td></tr>
-        <tr><td><code>layout.delete_cell(lib, cell)</code></td><td>Delete a cell</td></tr>
+        <tr><td><code>lay.add(skill_cmd)</code></td><td>Queue a SKILL command (from ops functions)</td></tr>
       </table>
     </div>
 

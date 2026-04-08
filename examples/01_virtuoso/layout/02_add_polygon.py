@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_polygon as polygon,
+)
 
 LAYER = "M3"
 PURPOSE = "drawing"
@@ -38,7 +41,7 @@ def main() -> int:
 
     def add_polygon() -> None:
         with client.layout.edit(lib, cell, mode="a") as layout:
-            layout.add_polygon(LAYER, PURPOSE, POINTS)
+            layout.add(polygon(LAYER, PURPOSE, POINTS))
 
     edit_elapsed, _ = timed_call(add_polygon)
     print(f"[edit_layout] [{format_elapsed(edit_elapsed)}]")

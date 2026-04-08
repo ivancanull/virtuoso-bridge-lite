@@ -10,15 +10,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_polygon as polygon,
+    layout_create_path as path,
+    layout_create_label as label,
+    layout_fit_view as fit_view,
+)
 
 LIB = "PLAYGROUND_LLM"
 CELL = "flower"
 
 N_PETALS = 8
-PETAL_A = 3.5    # semi-major axis (petal length), μm
-PETAL_B = 1.2    # semi-minor axis (petal width), μm
-PETAL_D = 3.2    # petal center distance from origin, μm
-CENTER_R = 1.8   # center circle radius, μm
+PETAL_A = 3.5    # semi-major axis (petal length), um
+PETAL_B = 1.2    # semi-minor axis (petal width), um
+PETAL_D = 3.2    # petal center distance from origin, um
+CENTER_R = 1.8   # center circle radius, um
 
 # Alternate two layers for petals so adjacent ones contrast in color
 PETAL_LAYERS = [("M3", "drawing"), ("M4", "drawing")]
@@ -47,34 +53,34 @@ def main() -> int:
 
     with client.layout.edit(LIB, CELL, mode="w") as layout:
 
-        # ── Petals ────────────────────────────────────────────────────────────
+        # -- Petals ----------------------------------------------------------------
         for i in range(N_PETALS):
             angle = math.pi * 2 * i / N_PETALS
             cx = PETAL_D * math.cos(angle)
             cy = PETAL_D * math.sin(angle)
             pts = ellipse_pts(cx, cy, PETAL_A, PETAL_B, angle)
             layer, purpose = PETAL_LAYERS[i % 2]
-            layout.add_polygon(layer, purpose, pts)
+            layout.add(polygon(layer, purpose, pts))
 
-        # ── Center circle ─────────────────────────────────────────────────────
+        # -- Center circle ---------------------------------------------------------
         center_pts = ellipse_pts(0.0, 0.0, CENTER_R, CENTER_R, 0.0, n=32)
-        layout.add_polygon(*CENTER_LAYER, center_pts)
+        layout.add(polygon(*CENTER_LAYER, center_pts))
 
-        # ── Stem ──────────────────────────────────────────────────────────────
-        layout.add_path(*STEM_LAYER, [(0.0, -4.8), (0.0, -14.5)], width=0.6)
+        # -- Stem ------------------------------------------------------------------
+        layout.add(path(*STEM_LAYER, [(0.0, -4.8), (0.0, -14.5)], width=0.6))
 
-        # ── Leaves (one left, one right, staggered vertically) ────────────────
+        # -- Leaves (one left, one right, staggered vertically) --------------------
         # Left leaf tilted upper-left
         leaf_l = ellipse_pts(-2.2, -8.5, 2.6, 0.85, math.radians(135), n=24)
-        layout.add_polygon(*LEAF_LAYER, leaf_l)
+        layout.add(polygon(*LEAF_LAYER, leaf_l))
         # Right leaf tilted lower-right
         leaf_r = ellipse_pts(2.2, -11.5, 2.6, 0.85, math.radians(45), n=24)
-        layout.add_polygon(*LEAF_LAYER, leaf_r)
+        layout.add(polygon(*LEAF_LAYER, leaf_r))
 
-        # ── Label ─────────────────────────────────────────────────────────────
-        layout.add_label(*LABEL_LAYER, xy=(0.0, -16.2), text="FLOWER", height=0.6)
+        # -- Label -----------------------------------------------------------------
+        layout.add(label(*LABEL_LAYER, 0.0, -16.2, "FLOWER", "centerLeft", "R0", "default", 0.6))
 
-        layout.fit_view()
+        layout.add(fit_view())
 
     client.open_window(LIB, CELL, view="layout")
     print("[Done] Flower layout created and opened.")

@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_path as path,
+)
 
 LAYERS = ["M2", "M3", "M4", "M5", "M6", "M7"]
 
@@ -36,7 +39,7 @@ def main() -> int:
     def add_routing() -> None:
         with client.layout.edit(lib, cell, mode="a") as layout:
             for layer in LAYERS:
-                layout.add_path(layer, "drawing", [(X_START, Y), (X_END, Y)], width=PATH_WIDTH)
+                layout.add(path(layer, "drawing", [(X_START, Y), (X_END, Y)], width=PATH_WIDTH))
 
     edit_elapsed, _ = timed_call(add_routing)
     print(f"[edit_layout] [{format_elapsed(edit_elapsed)}]")

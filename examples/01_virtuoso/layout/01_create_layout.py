@@ -11,6 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_param_inst as inst,
+    layout_create_rect as rect,
+    layout_create_path as path,
+    layout_create_label as label,
+)
 
 lib_name = "PLAYGROUND_LLM"
 cell_name = f"layout_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -23,14 +29,14 @@ def main() -> int:
 
     def build_layout() -> None:
         with client.layout.edit(lib_name, cell_name) as layout:
-            layout.add_instance(pdk_lib, "nch_ulvt_mac", (0.0, 0.0), name="M0")
-            layout.add_instance(pdk_lib, "pch_ulvt_mac", (2.0, 0.0), name="M1")
-            layout.add_instance(pdk_lib, "cfmom_2t", (4.0, 0.0), name="C0")
+            layout.add(inst(pdk_lib, "nch_ulvt_mac", "layout", "M0", 0.0, 0.0, "R0"))
+            layout.add(inst(pdk_lib, "pch_ulvt_mac", "layout", "M1", 2.0, 0.0, "R0"))
+            layout.add(inst(pdk_lib, "cfmom_2t", "layout", "C0", 4.0, 0.0, "R0"))
 
-            layout.add_rect("M1", "drawing", (1.0, 0.0, 2.0, 0.5))
-            layout.add_rect("M1", "drawing", (1.5, 1.0, 2.5, 1.5))
-            layout.add_path("M2", "drawing", [(1.0, 0.25), (3.0, 0.25)], width=0.1)
-            layout.add_label("M1", "pin", (1.1, 0.5), text="IN", height=0.1)
+            layout.add(rect("M1", "drawing", 1.0, 0.0, 2.0, 0.5))
+            layout.add(rect("M1", "drawing", 1.5, 1.0, 2.5, 1.5))
+            layout.add(path("M2", "drawing", [(1.0, 0.25), (3.0, 0.25)], width=0.1))
+            layout.add(label("M1", "pin", 1.1, 0.5, "IN", "centerLeft", "R0", "default", 0.1))
 
     elapsed, _ = timed_call(build_layout)
     print(f"[edit_layout] [{format_elapsed(elapsed)}]")

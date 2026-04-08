@@ -10,6 +10,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_path as path,
+    layout_create_label as label,
+)
 
 LAYERS    = ["M4"]
 BUS_WIDTH = 8
@@ -45,16 +49,16 @@ def main() -> int:
 
                 # Multi-layer path on every layer at the same coordinate
                 for layer in LAYERS:
-                    layout.add_path(layer, "drawing", [(X_START, y), (X_END, y)], width=PATH_WIDTH)
+                    layout.add(path(layer, "drawing", [(X_START, y), (X_END, y)], width=PATH_WIDTH))
 
                 # Label at the left end
-                layout.add_label(
+                layout.add(label(
                     LABEL_LAYER, "pin",
-                    (X_START, y),
-                    text=f"CODE<{bit}>",
-                    justification="centerLeft",
-                    height=LABEL_HEIGHT,
-                )
+                    X_START, y,
+                    f"CODE<{bit}>",
+                    "centerLeft", "R0", "default",
+                    LABEL_HEIGHT,
+                ))
 
     edit_elapsed, _ = timed_call(add_bus)
     print(f"[edit_layout] [{format_elapsed(edit_elapsed)}]")

@@ -10,6 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.layout.ops import (
+    layout_create_via_by_name as via_by_name,
+    layout_create_via as via,
+    layout_via_def_expr_from_name as via_def_from_name,
+)
 
 VIA_NAME = "M2_M1"
 BY_NAME_VIA_X = 1.5
@@ -35,16 +40,19 @@ def main() -> int:
 
     def add_vias() -> None:
         with client.layout.edit(lib, cell, mode="a") as layout:
-            layout.add_via_by_name(
+            layout.add(via_by_name(
                 VIA_NAME,
-                (BY_NAME_VIA_X, BY_NAME_VIA_Y),
+                BY_NAME_VIA_X,
+                BY_NAME_VIA_Y,
                 orientation=VIA_ORIENTATION,
-            )
-            layout.add_raw_via_by_name(
-                VIA_NAME,
-                (RAW_VIA_X, RAW_VIA_Y),
-                orientation=VIA_ORIENTATION,
-            )
+            ))
+            layout.add(via(
+                via_def_from_name(VIA_NAME),
+                RAW_VIA_X,
+                RAW_VIA_Y,
+                VIA_ORIENTATION,
+                "nil",
+            ))
 
     edit_elapsed, _ = timed_call(add_vias)
     print(f"[edit_layout] [{format_elapsed(edit_elapsed)}]")
