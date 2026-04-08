@@ -205,6 +205,7 @@ class VirtuosoClient(VirtuosoInterface):
     def ensure_ready(self, timeout: int = 10) -> VirtuosoResult:
         """Ensure the daemon is reachable via TCP."""
         metadata: dict[str, Any] = {}
+        logger.info("ensure_ready: checking daemon at %s:%d", self._host, self._port)
 
         # If we have a tunnel, make sure it's up
         if self._tunnel is not None:
@@ -212,7 +213,10 @@ class VirtuosoClient(VirtuosoInterface):
                 self._tunnel.warm()
                 metadata["tunnel_alive"] = self.is_tunnel_alive
                 self._port = self._tunnel.port  # may have changed due to port auto-retry
+                logger.info("ensure_ready: tunnel alive=%s, port=%d",
+                            metadata["tunnel_alive"], self._port)
             except Exception as e:
+                logger.warning("ensure_ready: tunnel setup failed: %s", e)
                 return VirtuosoResult(
                     status=ExecutionStatus.ERROR,
                     errors=[f"Tunnel setup failed: {e}"],
@@ -228,9 +232,11 @@ class VirtuosoClient(VirtuosoInterface):
             errors.append("Daemon did not respond to ping (ensure load() in CIW)")
 
         if errors:
+            logger.warning("ensure_ready: %s", report["summary"])
             if self._tunnel and self._tunnel.setup_path and not report.get("daemon_responsive"):
                 print(f'\nPlease execute in Virtuoso CIW: load("{self._tunnel.setup_path}")\n')
             return VirtuosoResult(status=ExecutionStatus.ERROR, errors=errors, metadata=metadata)
+        logger.info("ensure_ready: %s", report["summary"])
         return VirtuosoResult(status=ExecutionStatus.SUCCESS, metadata=metadata)
 
     def warm_remote_session(self, timeout: int = 10) -> VirtuosoResult:
@@ -261,23 +267,34 @@ class VirtuosoClient(VirtuosoInterface):
         if self._has_jump_host:
             connect_deadline = start_time + _TUNNEL_CONNECT_GRACE_SECONDS
 
+        logger.debug("execute_skill %s:%d timeout=%d skill=%s",
+                      self._host, self._port, effective_timeout, skill_code[:120])
+
         try:
             while True:
                 try:
                     raw_response = self._execute_skill_once(skill_code, effective_timeout)
                     elapsed = time.monotonic() - start_time
-                    return self._parse_response(raw_response, elapsed)
+                    result = self._parse_response(raw_response, elapsed)
+                    logger.debug("execute_skill OK (%.3fs)", elapsed)
+                    return result
                 except ConnectionRefusedError:
                     if time.monotonic() >= connect_deadline:
                         raise
+                    logger.debug("Connection refused, retrying (deadline in %.1fs)",
+                                 connect_deadline - time.monotonic())
                     time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
                 except OSError as exc:
                     if not self._should_retry_tunnel_connect(exc, time.monotonic(), connect_deadline):
                         raise
+                    logger.debug("OSError %s, retrying (deadline in %.1fs)",
+                                 exc, connect_deadline - time.monotonic())
                     time.sleep(_TUNNEL_CONNECT_RETRY_DELAY)
 
         except socket.timeout:
             elapsed = time.monotonic() - start_time
+            logger.warning("Socket timeout connecting to %s:%d after %ds",
+                           self._host, self._port, effective_timeout)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[f"Socket timeout after {effective_timeout}s"],
@@ -285,6 +302,8 @@ class VirtuosoClient(VirtuosoInterface):
             )
         except ConnectionRefusedError:
             elapsed = time.monotonic() - start_time
+            logger.warning("Connection refused to %s:%d (no daemon?)",
+                           self._host, self._port)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[
@@ -295,6 +314,8 @@ class VirtuosoClient(VirtuosoInterface):
             )
         except OSError as exc:
             elapsed = time.monotonic() - start_time
+            logger.warning("Socket error connecting to %s:%d: %s",
+                           self._host, self._port, exc)
             return VirtuosoResult(
                 status=ExecutionStatus.ERROR,
                 errors=[f"Socket error: {exc}"],
@@ -308,6 +329,7 @@ class VirtuosoClient(VirtuosoInterface):
 
     def verify_tunnel(self, timeout: int = 5) -> dict[str, Any]:
         """Diagnose connectivity."""
+        logger.info("verify_tunnel: probing %s:%d (timeout=%ds)", self._host, self._port, timeout)
         report: dict[str, Any] = {
             "tunnel_process_alive": None,
             "tcp_reachable": False,
@@ -340,6 +362,10 @@ class VirtuosoClient(VirtuosoInterface):
         )
         parts.append("daemon: " + ("OK" if report["daemon_responsive"] else "NO RESPONSE"))
         report["summary"] = " | ".join(parts)
+        if result.errors:
+            logger.warning("verify_tunnel: %s errors=%s", report["summary"], result.errors)
+        else:
+            logger.info("verify_tunnel: %s", report["summary"])
         return report
 
     # -- cellview operations ------------------------------------------------
@@ -586,7 +612,9 @@ class VirtuosoClient(VirtuosoInterface):
     def _execute_skill_once(self, skill_code: str, timeout: int) -> str:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
+            logger.debug("TCP connect %s:%d", self._host, self._port)
             s.connect((self._host, self._port))
+            logger.debug("TCP connected, sending %d-byte payload", len(skill_code))
             payload = json.dumps({"skill": skill_code, "timeout": timeout}).encode("utf-8")
             s.sendall(payload)
             s.shutdown(socket.SHUT_WR)
@@ -596,7 +624,9 @@ class VirtuosoClient(VirtuosoInterface):
                 if not chunk:
                     break
                 chunks.append(chunk)
-            return b"".join(chunks).decode("utf-8", errors="ignore")
+            raw = b"".join(chunks).decode("utf-8", errors="ignore")
+            logger.debug("TCP received %d bytes", len(raw))
+            return raw
 
     @staticmethod
     def _should_retry_tunnel_connect(exc: OSError, now: float, connect_deadline: float) -> bool:
