@@ -42,6 +42,17 @@ Always use the highest level that works. Drop to a lower level only when needed.
 
 ## Before you start
 
+### Environment setup
+
+> **Always use `uv` + virtual environment.** Never install into the global Python. `uv` refuses global installs by default, preventing accidental pollution.
+
+```bash
+uv venv .venv && source .venv/bin/activate   # Windows: source .venv/Scripts/activate
+uv pip install -e .
+```
+
+All `virtuoso-bridge` CLI commands and Python scripts must run inside the activated venv.
+
 ### Connection sequence (follow in order)
 
 1. **Check `.env`** — if the project has no `.env` yet, run **`virtuoso-bridge init`** to create one. If `.env` already exists, skip `init`.
@@ -90,6 +101,10 @@ for line in text.splitlines():
 Constraints:
 - **ASCII only** — emojis and CJK characters cause a JSON encoding error on the remote SKILL interpreter
 - **No unescaped SKILL special chars** in the text — if the line may contain `"` or `%`, escape them (`\\"`, `%%`) or use `load_il()` instead (see `03_load_il.py`)
+
+> **IMPORTANT: Always write `.py` files, never use `python -c`.**
+> `python -c "..."` has shell 引号 + Python 引号 + SKILL 引号三层转义叠加，`\\n` 很容易变成 `\\\\n` 导致 `printf` 静默失败（不报错但不输出）。
+> 正确做法：将代码写入 `.py` 文件再用 `python script.py` 执行，转义只有 Python + SKILL 两层，与例子一致。
 
 Full example: `examples/01_virtuoso/basic/02_ciw_print.py`
 
