@@ -189,6 +189,22 @@ def find_dialogs(display):
     return dialogs
 
 
+def _find_app_child(display, frame_id_str):
+    """Find the actual app window inside a WM frame (first named child)."""
+    try:
+        tree = subprocess.check_output(
+            ["xwininfo", "-id", frame_id_str, "-children"],
+            stderr=subprocess.PIPE
+        ).decode("utf-8", "replace")
+        for line in tree.splitlines():
+            line = line.strip()
+            if line.startswith("0x") and '"' in line:
+                return line.split()[0]
+    except (subprocess.CalledProcessError, OSError):
+        pass
+    return frame_id_str  # fallback to frame itself
+
+
 def dismiss_window(display, win_id_str):
     """Send Enter key to a window via XTest."""
     os.environ["DISPLAY"] = display
@@ -204,10 +220,12 @@ def dismiss_window(display, win_id_str):
     if not dpy:
         return {"error": "cannot open display %s" % display}
 
-    win_id = int(win_id_str, 16) if win_id_str.startswith("0x") else int(win_id_str)
+    # Focus the actual app child window, not the WM frame
+    child_id_str = _find_app_child(display, win_id_str)
+    child_id = int(child_id_str, 16) if child_id_str.startswith("0x") else int(child_id_str)
 
-    xlib.XRaiseWindow(dpy, win_id)
-    xlib.XSetInputFocus(dpy, win_id, 1, 0)  # RevertToParent
+    xlib.XRaiseWindow(dpy, child_id)
+    xlib.XSetInputFocus(dpy, child_id, 1, 0)  # RevertToParent
     xlib.XFlush(dpy)
 
     time.sleep(0.15)
@@ -219,7 +237,7 @@ def dismiss_window(display, win_id_str):
     xlib.XFlush(dpy)
 
     xlib.XCloseDisplay(dpy)
-    return {"dismissed": win_id_str, "keycode": int(keycode)}
+    return {"dismissed": win_id_str, "child": child_id_str, "keycode": int(keycode)}
 
 
 def main():
