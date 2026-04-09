@@ -59,6 +59,9 @@ client.download_file("/tmp/debug.png", "output/debug.png")
 
 ## Maestro / Design Variables
 
+### `mae*` functions undefined (`*Error* undefined function`)
+Older Virtuoso versions may not have `mae*` API. Use `asi*` equivalents instead. See the "asi\* Fallback" section in `maestro-skill-api.md` for the full mapping table. Detection: `fboundp('maeRunSimulation)`.
+
 ### `maeGetSetup(?typeName "globalVar")` may return nil
 Use `asiGetDesignVarList(asiGetCurrentSession())` as a fallback.
 

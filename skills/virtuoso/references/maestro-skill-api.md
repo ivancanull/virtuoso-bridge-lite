@@ -42,6 +42,31 @@ Residual lock cleanup: first try `maeCloseSession` on any stale sessions (`maeGe
 
 **Critical:** `sevRun` does not work for ADE Assembler — `sevSession()` returns nil on Assembler windows.
 
+## asi\* Fallback for Older Virtuoso Environments
+
+In older Virtuoso versions (pre-IC6.1.8 or certain academic installs), `mae*` functions may be unavailable (`*Error* undefined function`). The `asi*` API covers the same ground and works across all ADE types:
+
+| mae\* (IC618+) | asi\* equivalent | Notes |
+|----------------|-----------------|-------|
+| `maeOpenSetup(lib cell "maestro")` | `asiOpenSetup(lib cell "maestro")` | Returns session handle |
+| `maeGetSessions()` | `asiGetSessionList()` | List open sessions |
+| `maeGetVar("VDD")` | `asiGetDesignVarList(asiGetCurrentSession())` | Returns all vars as list |
+| `maeSetVar("VDD" "0.9")` | `asiSetDesignVarValue(asiGetCurrentSession() "VDD" "0.9")` | |
+| `maeRunSimulation()` | `asiRunSimulation()` | |
+| `maeWaitUntilDone('All)` | — | No direct equivalent; poll with `asiGetStatus()` |
+| `maeGetOutputValue(...)` | Use OCEAN (`openResults` / `evalOutput`) | See OCEAN section below |
+| `maeCloseSession(session)` | `asiCloseSession(asiGetCurrentSession())` | |
+
+**Detection:** check at runtime before choosing a path:
+```scheme
+if(fboundp('maeRunSimulation)
+  then /* mae* flow */
+  else /* asi* fallback */
+)
+```
+
+When using `asi*`, read simulation results via OCEAN (`openResults` / `selectResult` / `getData`) — see the [OCEAN Quick Reference](#ocean-quick-reference) section.
+
 ## Design Variables
 
 ```python
