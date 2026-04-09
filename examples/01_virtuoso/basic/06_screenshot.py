@@ -20,6 +20,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.transport.remote_paths import (
+    default_virtuoso_bridge_dir,
+    resolve_remote_username,
+)
 from virtuoso_bridge.virtuoso.ops import escape_skill_string
 
 IL_FILE = Path(__file__).resolve().parent.parent / "assets" / "screenshot.il"
@@ -42,11 +46,18 @@ def main() -> int:
     print(f"[load_il] {'uploaded' if meta.get('uploaded') else 'cache hit'}  [{format_elapsed(load_elapsed)}]")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    remote_path = f"/tmp/virtuoso_bridge_screenshots/{cell}_{stamp}.png"
-    shell_elapsed, _ = timed_call(
-        lambda: client.run_shell_command("mkdir -p /tmp/virtuoso_bridge_screenshots", timeout=10)
+    username = resolve_remote_username(
+        configured_user=client._tunnel._remote_user,
+        runner=client._tunnel._ssh_runner,
     )
-    print(f"[run_shell_command] [{format_elapsed(shell_elapsed)}]")
+    screenshot_dir = default_virtuoso_bridge_dir(username, "screenshots")
+    remote_path = f"{screenshot_dir}/{cell}_{stamp}.png"
+    # Create directory via SSH (not SKILL csh) so it exists on the SSH-accessible filesystem
+    mkdir_result = client._tunnel._ssh_runner.run_command(f"mkdir -p {screenshot_dir}")
+    if mkdir_result.returncode != 0:
+        print(f"[mkdir] failed: {mkdir_result.stderr}")
+        return 1
+    print(f"[mkdir] {screenshot_dir}")
 
     exec_elapsed, result = timed_call(
         lambda: client.execute_skill(
