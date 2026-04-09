@@ -18,9 +18,9 @@ client = VirtuosoClient.from_env()
 
 sonnet = """\
 
-════════════════════════════════════════════════════════
+========================================================
   Sonnet 18  by William Shakespeare
-════════════════════════════════════════════════════════
+========================================================
 
   Shall I compare thee to a summer's day?
   Thou art more lovely and more temperate:
@@ -37,7 +37,7 @@ sonnet = """\
     So long as men can breathe, or eyes can see,
     So long lives this, and this gives life to thee.
 
-════════════════════════════════════════════════════════"""
+========================================================"""
 
 for line in sonnet.splitlines():
     r = client.execute_skill('printf("' + line + '\\n")')
