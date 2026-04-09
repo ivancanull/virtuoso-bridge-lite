@@ -121,8 +121,8 @@ Constraints:
 - **No unescaped SKILL special chars** in the text — if the line may contain `"` or `%`, escape them (`\\"`, `%%`) or use `load_il()` instead (see `03_load_il.py`)
 
 > **IMPORTANT: Always write `.py` files, never use `python -c`.**
-> `python -c "..."` has shell 引号 + Python 引号 + SKILL 引号三层转义叠加，`\\n` 很容易变成 `\\\\n` 导致 `printf` 静默失败（不报错但不输出）。
-> 正确做法：将代码写入 `.py` 文件再用 `python script.py` 执行，转义只有 Python + SKILL 两层，与例子一致。
+> `python -c "..."` has three layers of quoting (shell + Python + SKILL). `\\n` easily becomes `\\\\n`, causing `printf` to silently produce no output.
+> Always write code to a `.py` file and run `python script.py` -- only two quoting layers (Python + SKILL), matching the examples.
 
 Full example: `examples/01_virtuoso/basic/02_ciw_print.py`
 
