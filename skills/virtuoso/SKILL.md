@@ -140,7 +140,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 | `references/maestro-python-api.md` | Session, read_config (verbose 0/1/2), writer functions |
 | `references/netlist.md` | CDL/Spectre netlist formats, spiceIn import |
 | `references/troubleshooting.md` | Known gotchas, GUI blocking, CDF quirks, connection issues |
-| `references/copy-testbench.md` | Copy testbench + Maestro to another library (pitfalls, CDF param names) |
+| `references/testbench-migration.md` | Migrate testbench + Maestro to another library (pitfalls, CDF param names) |
 
 ## Examples
 
