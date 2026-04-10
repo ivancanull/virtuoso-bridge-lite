@@ -121,11 +121,14 @@ def find_dialogs(display):
         # Skip very tiny windows
         if geo_w < 20 or geo_h < 20:
             continue
-        # Skip tall windows (typically editor/result panes, not modal dialogs).
-        # Keep wide-but-short modals such as ADE "Update and Run" prompts.
+        # Thresholds derived from observed Virtuoso window sizes at 1x DPI:
+        #   Modal dialogs:  ~300-600w × 100-350h  (e.g. ADE "Update and Run" ≈ 580×140)
+        #   Editor/log panes: ~500-800w × 500-900h (e.g. spectre.out ≈ 535×755)
+        #   Main app frames: 1200+w × 700+h
+        # Skip tall windows (editor/result panes, not modal dialogs).
         if geo_h > 420:
             continue
-        # Skip windows that are very large in BOTH dimensions (likely main app frames).
+        # Skip windows that are very large in both dimensions (main app frames).
         if geo_w > 1000 and geo_h > 300:
             continue
 
