@@ -366,6 +366,24 @@ value = float(r.output) if r.output else None
 client.execute_skill("maeCloseResults()", timeout=10)
 ```
 
+### Output read/export guardrails (collision-safe)
+
+Apply these rules whenever you read or export **any** maestro output (scalar or waveform):
+
+1. **History binding is mandatory**
+    - Always use the exact `history` returned by `maeRunSimulation()`.
+    - Pass that `history` explicitly to result readers/exporters (for example, `read_results(..., history=history)` and `export_waveform(..., history=history)`).
+    - Do not rely on "latest" history inference when reproducibility matters.
+
+2. **Remote filename must be unique per export**
+    - Never use a fixed `/tmp/vb_wave_xxx.txt` path.
+    - Use unique naming such as `/tmp/vb_wave_<history>_<timestamp>_<nonce>.txt`.
+    - This avoids collisions with stale files from previous runs or other users.
+
+3. **Bind results directory to the same history before ocnPrint**
+    - After `maeOpenResults(?history ...)`, verify the resolved `resultsDir` contains `/<history>/`.
+    - If mismatch is detected, stop and raise an error instead of exporting the wrong waveform.
+
 **In optimization loops:** add `maeSaveSetup` and dialog-recovery in every iteration. GUI dialogs ("Specify history name", "No analyses enabled") block the entire SKILL channel — all subsequent `execute_skill` calls will timeout until the dialog is dismissed.
 
 **Debug with screenshots:** if simulation appears stuck or results are unexpected, capture the Maestro window to see its current state:
