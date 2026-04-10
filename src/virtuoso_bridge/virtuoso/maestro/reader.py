@@ -7,8 +7,23 @@ Three independent read functions:
 """
 
 import re
+import time
+import uuid
 
 from virtuoso_bridge import VirtuosoClient
+
+
+def _history_token(history: str) -> str:
+    """Return a filesystem-safe token for history naming."""
+    token = re.sub(r"[^A-Za-z0-9_.-]", "_", (history or "").strip())
+    return token or "unknown"
+
+
+def _unique_remote_wave_path(history: str) -> str:
+    """Create a unique remote path to avoid cross-user file collisions."""
+    ts_ms = int(time.time() * 1000)
+    nonce = uuid.uuid4().hex[:8]
+    return f"/tmp/vb_wave_{_history_token(history)}_{ts_ms}_{nonce}.txt"
 
 
 def _q(client: VirtuosoClient, label: str, expr: str) -> tuple[str, str]:
@@ -121,7 +136,7 @@ def read_env(client: VirtuosoClient, session: str) -> dict[str, tuple[str, str]]
 
 
 def read_results(client: VirtuosoClient, session: str,
-                  lib: str = "", cell: str = "") -> dict[str, tuple[str, str]]:
+                  lib: str = "", cell: str = "", history: str = "") -> dict[str, tuple[str, str]]:
     """Read simulation results: output values, spec status, yield.
 
     Requires GUI mode (deOpenCellView + maeMakeEditable).
@@ -132,6 +147,8 @@ def read_results(client: VirtuosoClient, session: str,
         session: active session string
         lib: library name (auto-detected if empty)
         cell: cell name (auto-detected if empty)
+        history: explicit history name (preferred, e.g. "Interactive.7").
+            If empty, falls back to scanning latest valid Interactive.N.
     """
     def q(label, expr):
         return _q(client, label, expr)
@@ -152,9 +169,12 @@ def read_results(client: VirtuosoClient, session: str,
     if not lib or not cell:
         return {}
 
-    # Scan for latest valid history (highest Interactive.N with outputs)
     test = _get_test(client, session)
-    find_expr = f'''
+    if history:
+        latest_history = history.strip()
+    else:
+        # Scan for latest valid history (highest Interactive.N with outputs)
+        find_expr = f'''
 let((libPath base files nums found)
   libPath = ddGetObj("{lib}")~>readPath
   base = strcat(libPath "/{cell}/maestro/results/maestro/")
@@ -184,8 +204,8 @@ let((libPath base files nums found)
   found
 )
 '''
-    _, latest_raw = q("findHistory", find_expr)
-    latest_history = latest_raw.strip('"')
+        _, latest_raw = q("findHistory", find_expr)
+        latest_history = latest_raw.strip('"')
 
     if not latest_history or latest_history == "nil":
         return {}
@@ -277,7 +297,7 @@ def export_waveform(
             if not history or history == "nil":
                 raise RuntimeError("No simulation history found")
 
-    remote_path = f"/tmp/vb_wave_{history}.txt"
+    remote_path = _unique_remote_wave_path(history)
 
     # First maeOpenResults to point asiGetResultsDir at the correct history,
     # then use OCEAN openResults with that path.
@@ -288,6 +308,10 @@ def export_waveform(
 
     if not results_dir or results_dir == "nil" or "tmpADE" in results_dir:
         raise RuntimeError(f"No valid results directory for {history}")
+    if f"/{history}/" not in results_dir:
+        raise RuntimeError(
+            f"History mismatch: expected {history}, got resultsDir={results_dir}"
+        )
 
     client.execute_skill(f'openResults("{results_dir}")')
     client.execute_skill(f'selectResults("{analysis}")')
