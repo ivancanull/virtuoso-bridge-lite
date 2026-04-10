@@ -121,8 +121,12 @@ def find_dialogs(display):
         # Skip very tiny windows
         if geo_w < 20 or geo_h < 20:
             continue
-        # Skip windows too large to be dialogs (either dimension > 500)
-        if geo_w > 500 or geo_h > 500:
+        # Skip tall windows (typically editor/result panes, not modal dialogs).
+        # Keep wide-but-short modals such as ADE "Update and Run" prompts.
+        if geo_h > 420:
+            continue
+        # Skip windows that are very large in BOTH dimensions (likely main app frames).
+        if geo_w > 1000 and geo_h > 300:
             continue
 
         candidates.append(win_id)
