@@ -302,23 +302,23 @@ from virtuoso_bridge import VirtuosoClient, decode_skill_output
 client = VirtuosoClient.from_env()
 LIB, CELL = "myLib", "myCell"
 
-# 1. Schematic — read everything in one call
+# 1. Schematic — default: topology only (no positions/geometry)
 from virtuoso_bridge.virtuoso.schematic.reader import read_schematic
-data = read_schematic(client, LIB, CELL)
+data = read_schematic(client, LIB, CELL, include_positions=False)
 # data = {
-#     "instances": [{"name", "lib", "cell", "xy", "orient", "bBox",
-#                    "numInst", "view", "params": {...}, "terms": {...}}, ...],
+#     "instances": [{"name", "lib", "cell", "numInst", "view",
+#                    "params": {...}, "terms": {...}}, ...],
 #     "nets": {"VN1": {"connections": ["M0.D", ...], "numBits": 1,
 #                       "sigType": "signal", "isGlobal": false}, ...},
 #     "pins": {"VINP": {"direction": "input", "numBits": 1}, ...},
-#     "notes": [{"text": "...", "xy": [...], ...}, ...]
+#     "notes": [{"text": "...", ...}, ...]
 # }
 
-# Topology only (no positions/geometry):
-topo = read_schematic(client, LIB, CELL, include_positions=False)
+# With positions (only when you need xy/bBox, e.g. for layout-aware editing):
+data_with_pos = read_schematic(client, LIB, CELL, include_positions=True)
 
 # No CDF param filtering (return all 200+ PDK params):
-raw = read_schematic(client, LIB, CELL, param_filters=None)
+raw = read_schematic(client, LIB, CELL, include_positions=False, param_filters=None)
 
 # 2. Maestro — use open_session / read_config / close_session
 from virtuoso_bridge.virtuoso.maestro import open_session, close_session, read_config

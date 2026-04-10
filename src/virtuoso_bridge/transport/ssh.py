@@ -110,6 +110,39 @@ class CommandResult(NamedTuple):
     stdout: str
     stderr: str
 
+def _derive_tool(base_cmd: str, old_name: str, new_name: str) -> str:
+    """Derive a sibling tool path from a known tool (e.g. ssh -> scp).
+
+    Handles both 'ssh' and 'ssh.exe' endings.
+    """
+    for suffix in (old_name + ".exe", old_name):
+        if base_cmd.endswith(suffix):
+            candidate = base_cmd[: -len(suffix)] + new_name + (".exe" if suffix.endswith(".exe") else "")
+            if os.path.isfile(candidate):
+                return candidate
+    return shutil.which(new_name) or _find_git_tool(new_name) or new_name
+
+
+def _find_git_tool(name: str) -> str | None:
+    """Find a tool (ssh, scp, tar) in Git for Windows usr/bin.
+
+    On Windows, Python venvs inherit only the Windows system PATH, which
+    typically includes Git\\cmd (git.exe) but NOT Git\\usr\\bin (ssh, scp, tar).
+    Git Bash adds usr/bin via its own profile, but that's invisible to Python.
+    """
+    if os.name != "nt":
+        return None
+    for base in [
+        os.path.join(os.environ.get("ProgramFiles", ""), "Git", "usr", "bin"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Git", "usr", "bin"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin"),
+    ]:
+        candidate = os.path.join(base, f"{name}.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 class SSHRunner:
     """Generic SSH/rsync/tar runner using OpenSSH CLI tools."""
 
@@ -138,8 +171,8 @@ class SSHRunner:
         self._persistent_shell_enabled = persistent_shell
         self._verbose = verbose
 
-        self._ssh_cmd = ssh_cmd or shutil.which("ssh") or "ssh"
-        self._tar_cmd = shutil.which("tar") or "tar"
+        self._ssh_cmd = ssh_cmd or shutil.which("ssh") or _find_git_tool("ssh") or "ssh"
+        self._tar_cmd = shutil.which("tar") or _find_git_tool("tar") or "tar"
 
         # ControlMaster socket path for SSH connection multiplexing.
         # All ssh/scp calls to the same host reuse one TCP connection.
@@ -588,7 +621,7 @@ class SSHRunner:
             return self._download_via_tar(remote_path, local_path, timeout=effective_timeout)
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        scp_bin = self._ssh_cmd.replace("ssh", "scp") if self._ssh_cmd.endswith("ssh") else (shutil.which("scp") or "scp")
+        scp_bin = _derive_tool(self._ssh_cmd, "ssh", "scp")
         cmd = [scp_bin] + self._common_ssh_options()
         cmd += [self._remote_scp_target(remote_path), str(local_path)]
         self._print_cmd(cmd)

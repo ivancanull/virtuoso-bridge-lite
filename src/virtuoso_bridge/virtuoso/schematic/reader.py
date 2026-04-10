@@ -126,7 +126,7 @@ def read_schematic(
     lib: str | None = None,
     cell: str | None = None,
     *,
-    include_positions: bool = True,
+    include_positions: bool = False,
     param_filters: str | Path | None = _DEFAULT_FILTERS_PATH,
 ) -> dict:
     """Read a schematic in one SKILL call.
