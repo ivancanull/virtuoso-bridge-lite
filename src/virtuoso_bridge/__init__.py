@@ -1,5 +1,12 @@
 """virtuoso-bridge – Python bridge for executing SKILL in Cadence Virtuoso."""
 
+from importlib.metadata import version as _pkg_version
+
+try:
+    __version__ = _pkg_version("virtuoso-bridge")
+except Exception:
+    __version__ = "0.0.0-unknown"
+
 from virtuoso_bridge.virtuoso.basic.bridge import VirtuosoClient
 from virtuoso_bridge.transport.tunnel import SSHClient
 from virtuoso_bridge.models import (

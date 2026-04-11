@@ -259,8 +259,9 @@ def _print_status() -> int:
     state = SSHClient.read_state(profile)
     running = SSHClient.is_running(profile)
 
+    from virtuoso_bridge import __version__
     label = f" [{profile}]" if profile else ""
-    print(f"  Virtuoso Bridge Status{label}")
+    print(f"  Virtuoso Bridge v{__version__}{label}")
 
     suffix = f"_{profile}" if profile else ""
     configured_host = os.getenv(f"VB_REMOTE_HOST{suffix}", "").strip()
