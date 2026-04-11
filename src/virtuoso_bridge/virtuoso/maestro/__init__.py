@@ -4,6 +4,8 @@ from virtuoso_bridge.virtuoso.maestro.session import (
     open_session,
     close_session,
     find_open_session,
+    open_gui_session,
+    close_gui_session,
 )
 from virtuoso_bridge.virtuoso.maestro.reader import read_config, read_env, read_results, export_waveform
 from virtuoso_bridge.virtuoso.maestro.writer import (
@@ -54,6 +56,8 @@ __all__ = [
     "open_session",
     "close_session",
     "find_open_session",
+    "open_gui_session",
+    "close_gui_session",
     # read
     "read_config",
     "read_env",
