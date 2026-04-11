@@ -19,26 +19,27 @@ logger = logging.getLogger(__name__)
 # X11 key sending (for dismissing dialogs that block SKILL)
 # ---------------------------------------------------------------------------
 
-def _send_x11_key(runner, keysym: int) -> None:
-    """Send a single keypress to the Virtuoso X11 display via SSH.
-
-    Uses python2.7 + ctypes on the remote (works even without python3).
-    Display is auto-detected from VB_DISPLAY env or defaults to
-    querying the Virtuoso process environment.
-    """
+def _detect_virtuoso_display(runner) -> str:
+    """Detect the DISPLAY used by the Virtuoso process."""
     import os
     display = os.getenv("VB_DISPLAY", "")
-    if not display:
-        # Try to detect from virtuoso process
-        r = runner.run_command(
-            'strings /proc/$(pgrep -u $(whoami) -f "64bit/virtuoso" | head -1)/environ 2>/dev/null '
-            '| grep ^DISPLAY= | head -1',
-            timeout=5)
-        display = (r.stdout or "").strip().replace("DISPLAY=", "")
+    if display:
+        return display
+    r = runner.run_command(
+        'strings /proc/$(pgrep -u $(whoami) -f "64bit/virtuoso" | head -1)/environ 2>/dev/null '
+        '| grep ^DISPLAY= | head -1',
+        timeout=5)
+    display = (r.stdout or "").strip().replace("DISPLAY=", "")
     if not display:
         logger.warning("Cannot detect DISPLAY for X11 key sending")
-        return
+    return display
 
+
+def _send_x11_key(runner, keysym: int) -> None:
+    """Send a single keypress to the Virtuoso X11 display via SSH."""
+    display = _detect_virtuoso_display(runner)
+    if not display:
+        return
     runner.run_command(
         f'DISPLAY={display} python2.7 -c "'
         f'import ctypes,ctypes.util;'
@@ -48,6 +49,27 @@ def _send_x11_key(runner, keysym: int) -> None:
         f'kc=xlib.XKeysymToKeycode(dpy,{keysym});'
         f'xtst.XTestFakeKeyEvent(dpy,kc,True,0);'
         f'xtst.XTestFakeKeyEvent(dpy,kc,False,0);'
+        f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
+        timeout=5)
+
+
+def _send_x11_alt_n(runner) -> None:
+    """Send Alt+N (No/Don't Save) to the Virtuoso X11 display."""
+    display = _detect_virtuoso_display(runner)
+    if not display:
+        return
+    runner.run_command(
+        f'DISPLAY={display} python2.7 -c "'
+        f'import ctypes,ctypes.util;'
+        f'xlib=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(49)+chr(49)));'
+        f'xtst=ctypes.cdll.LoadLibrary(ctypes.util.find_library(chr(88)+chr(116)+chr(115)+chr(116)));'
+        f'dpy=xlib.XOpenDisplay(None);'
+        f'ka=xlib.XKeysymToKeycode(dpy,0xffe9);'
+        f'kn=xlib.XKeysymToKeycode(dpy,0x006e);'
+        f'xtst.XTestFakeKeyEvent(dpy,ka,True,0);'
+        f'xtst.XTestFakeKeyEvent(dpy,kn,True,0);'
+        f'xtst.XTestFakeKeyEvent(dpy,kn,False,0);'
+        f'xtst.XTestFakeKeyEvent(dpy,ka,False,0);'
         f'xlib.XFlush(dpy);xlib.XCloseDisplay(dpy)"',
         timeout=5)
 
@@ -96,7 +118,13 @@ let((result)
 
 
 def _close_background_sessions(client: VirtuosoClient) -> list[str]:
-    """Close all background (maeOpenSetup) sessions. Returns closed session names."""
+    """Close all non-GUI sessions (background + zombie). Returns closed session names.
+
+    Zombie sessions (GUI-opened but window already closed) cannot be
+    closed via maeCloseSession (ASSEMBLER-8051). We attempt to close
+    them but silently ignore failures — they don't hold edit locks
+    once their windows are gone.
+    """
     r = client.execute_skill('maeGetSessions()')
     raw = (r.output or "").strip()
     if not raw or raw == "nil":
@@ -107,8 +135,8 @@ def _close_background_sessions(client: VirtuosoClient) -> list[str]:
     closed = []
     for s in sessions:
         if s not in gui_sessions:
-            client.execute_skill(f'maeCloseSession(?session "{s}" ?forceClose t)')
-            logger.info("Closed background session: %s", s)
+            client.execute_skill(f'errset(maeCloseSession(?session "{s}" ?forceClose t))')
+            logger.info("Closed background/zombie session: %s", s)
             closed.append(s)
     return closed
 
@@ -179,22 +207,21 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str) -> str:
 
     # Step 2: check existing GUI sessions
     windows = _get_session_windows(client)
-    target = f"{lib}/{cell}"
 
     for w in windows:
         title = w["title"]
-        # Check if this window is for our lib/cell
-        if lib not in title or cell not in title:
-            continue
+        is_target = (lib in title and cell in title)
 
-        if w["mode"] == "editing":
-            # Already editable — reuse this session
+        if is_target and w["mode"] == "editing":
+            # Already editable for our cell — reuse
             logger.info("Reusing existing editable session: %s", w["session"])
             return w["session"]
 
-        # Reading mode — close it (discard any changes)
-        logger.info("Closing read-only session %s (modified=%s)", w["session"], w["modified"])
-        _close_gui_window(client, w)
+        # Close windows that are:
+        # - for a different cell (must release edit lock)
+        # - for our cell but in reading mode
+        logger.info("Closing session %s (%s, target=%s)", w["session"], w["mode"], is_target)
+        close_gui_session(client, w["session"], save=(w["mode"] == "editing"))
 
     # Step 3: open fresh
     logger.info("Opening GUI: %s/%s/maestro", lib, cell)
@@ -293,12 +320,11 @@ def _close_gui_window(client: VirtuosoClient, window_info: dict,
         runner = client.ssh_runner
         if runner is not None:
             def _dismiss_save_dialog():
-                """Send Escape after a short delay to dismiss save dialog."""
+                """Send Alt+N after a short delay to dismiss save dialog."""
                 _time.sleep(0.5)
-                # Escape dismisses both "Save As" and "Save changes?" dialogs
-                _send_x11_key(runner, 0xff1b)  # Escape
-                _time.sleep(0.3)
-                _send_x11_key(runner, 0xff1b)  # Escape again (in case of nested dialog)
+                # Alt+N selects "No" (Don't Save) on save confirmation dialogs.
+                # Escape only cancels the dialog without closing the window.
+                _send_x11_alt_n(runner)
 
             dismiss_thread = threading.Thread(target=_dismiss_save_dialog, daemon=True)
             dismiss_thread.start()
