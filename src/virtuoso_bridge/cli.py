@@ -68,7 +68,9 @@ def _ssh_precheck(profile: str | None = None) -> int | None:
         user = ssh_env.jump_user or ssh_env.remote_user
         runner = SSHRunner(host=ssh_env.jump_host, user=user, connect_timeout=5, persistent_shell=False)
         if not runner.test_connection():
-            print(f"SSH to jump host {ssh_env.jump_host} failed. Fix SSH first.")
+            print(f"SSH to jump host {ssh_env.jump_host} failed.")
+            print(f"  Check VB_JUMP_HOST in your .env file.")
+            print(f"  Verify: ssh {user}@{ssh_env.jump_host}")
             return 1
 
     if ssh_env.remote_host:
@@ -79,7 +81,12 @@ def _ssh_precheck(profile: str | None = None) -> int | None:
             connect_timeout=5, persistent_shell=False,
         )
         if not runner.test_connection():
-            print(f"SSH to {ssh_env.remote_host} failed. Fix SSH first.")
+            print(f"SSH to {ssh_env.remote_host} failed.")
+            print(f"  Check VB_REMOTE_HOST and VB_REMOTE_USER in your .env file.")
+            if ssh_env.jump_host:
+                print(f"  Verify: ssh -J {jump_user}@{ssh_env.jump_host} {ssh_env.remote_user}@{ssh_env.remote_host}")
+            else:
+                print(f"  Verify: ssh {ssh_env.remote_user}@{ssh_env.remote_host}")
             return 1
     return None
 

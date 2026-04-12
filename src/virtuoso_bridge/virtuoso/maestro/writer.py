@@ -346,7 +346,7 @@ def run_and_wait(client: VirtuosoClient, *, session: str = "",
     client.execute_skill(f'''
 procedure(_vb_sim_done_{nonce}(session runID)
   system(sprintf(nil "echo done > {marker}"))
-  printf("[%s sim done] run %s\\n" nth(2 parseString(getCurrentTime())) runID))
+  printf("[%s sim done] run %L\\n" nth(2 parseString(getCurrentTime())) runID))
 ''')
 
     # Start simulation with callback — atomic, no race condition
