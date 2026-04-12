@@ -248,7 +248,12 @@ class SSHClient:
     # -- remote deployment --------------------------------------------------
 
     def _detect_remote_python(self) -> tuple[str, int, int]:
+        # Try Cadence-bundled Python 3.9+ first (IC23.1+), then system python3,
+        # then generic python, then python2.7.
         detect_cmd = (
+            '(test -x "$CDSHOME/tools.lnx86/python/64bit/bin/python3" && '
+            '$CDSHOME/tools.lnx86/python/64bit/bin/python3 --version 2>&1 && '
+            'echo "CMD:$CDSHOME/tools.lnx86/python/64bit/bin/python3") || '
             'python3 --version 2>&1 && echo "CMD:python3" || '
             '(python --version 2>&1 && echo "CMD:python") || '
             '(python2.7 --version 2>&1 && echo "CMD:python2.7") || '
