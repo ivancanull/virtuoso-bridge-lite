@@ -3,8 +3,15 @@
 Usage:
     from virtuoso_bridge.virtuoso.schematic.params import set_instance_params
 
+    # MOS transistors (shorthand params)
     set_instance_params(client, "MP0", w="500n", l="30n", nf="4", m="2")
-    set_instance_params(client, "MN0", wf="250n", nf="8")  # wf = finger width
+    set_instance_params(client, "MN0", wf="250n", nf="8")
+
+    # Any component via **kwargs
+    set_instance_params(client, "I0", idc="100u")           # current source
+    set_instance_params(client, "V0", vdc="1.8", vac="1")   # voltage source
+    set_instance_params(client, "R0", r="10k")              # resistor
+    set_instance_params(client, "C0", c="1p")               # capacitor
 """
 
 from __future__ import annotations
@@ -44,8 +51,12 @@ def set_instance_params(
     l: str | None = None,
     nf: str | None = None,
     m: str | None = None,
+    **kwargs: str,
 ) -> None:
-    """Set device parameters on a specific instance, then trigger CDF callbacks.
+    """Set CDF parameters on any instance, then trigger CDF callbacks.
+
+    MOS shorthand args (w, wf, l, nf, m) are mapped to PDK CDF names.
+    Any other parameter can be passed via kwargs.
 
     Args:
         w: Total width (e.g. "2u"). w = wf × nf.
@@ -53,6 +64,8 @@ def set_instance_params(
         l: Channel length (e.g. "30n").
         nf: Number of fingers (e.g. "4"). Maps to CDF param "fingers".
         m: Multiplier (e.g. "2").
+        **kwargs: Any CDF parameter name=value, e.g. idc="100u", vdc="1.8",
+                  r="10k", c="1p", freq="1G", etc.
     """
     if w is not None and wf is not None:
         raise ValueError("Specify w (total width) or wf (finger width), not both")
@@ -67,6 +80,7 @@ def set_instance_params(
         params[_PARAM_MAP["nf"]] = nf
     if m is not None:
         params["m"] = m
+    params.update(kwargs)
     if not params:
         return
 
