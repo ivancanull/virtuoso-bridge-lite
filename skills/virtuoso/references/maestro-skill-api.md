@@ -310,12 +310,32 @@ maeSaveSetup(?lib "myLib" ?cell "myCell" ?view "maestro" ?session "fnxSession4")
 ; GUI stays responsive, results appear automatically in Maestro window
 maeRunSimulation()
 maeRunSimulation(?session "fnxSession4")
+```
 
-; Wait separately (if async)
+#### Post-simulation callback (recommended)
+
+Use `?callback` to register a procedure that is called automatically when the simulation finishes. This is non-blocking — the SKILL channel and GUI remain responsive:
+
+```scheme
+; Define callback — receives session handle and run ID
+procedure(RunFinishedCallback(session runID)
+  printf("Run ID %L has finished\n" runID)
+)
+
+; Run with callback — returns immediately, callback fires on completion
+maeRunSimulation(?callback "RunFinishedCallback")
+```
+
+The callback receives two arguments: `session` (the maestro session) and `runID` (e.g. `"Interactive.3"`). This is the cleanest way to chain post-simulation actions (result reading, export, next optimization iteration, etc.) without blocking.
+
+#### Blocking wait (use with caution)
+
+```scheme
+; Blocks the SKILL channel until all simulations finish
 maeWaitUntilDone('All)
 ```
 
-**Important:** `maeRunSimulation(?waitUntilDone t)` blocks Virtuoso's event loop, which prevents the GUI from refreshing and can break the bridge connection. Use **async** `maeRunSimulation()` + `maeWaitUntilDone('All)` instead.
+**Important:** `maeRunSimulation(?waitUntilDone t)` blocks Virtuoso's entire event loop, which prevents the GUI from refreshing and can break the bridge connection. If you must wait synchronously, use `maeRunSimulation()` + `maeWaitUntilDone('All)` instead — it still blocks the SKILL channel but doesn't freeze the GUI. Prefer `?callback` for a fully non-blocking approach.
 
 **Important:** Results only appear automatically in the Maestro GUI when the maestro window was opened via `deOpenCellView` **before** running. If maestro was only opened as a backend session (`maeOpenSetup`), results won't display.
 
@@ -522,10 +542,16 @@ client.execute_skill(
     f'?signalName "/OUT" ?session "{session}")')
 client.execute_skill(f'maeSetVar("c_val" "1p,100f" ?session "{session}")')
 
-# 5. Save + run (async — never use ?waitUntilDone t, it blocks the event loop)
+# 5. Save + run
 client.execute_skill(
     f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" '
     f'?view "maestro" ?session "{session}")')
+
+# Option A: use run_and_wait() from Python API (recommended — uses ?callback, non-blocking)
+# from virtuoso_bridge.virtuoso.maestro import run_and_wait
+# history, status = run_and_wait(client, session=session, timeout=300)
+
+# Option B: blocking wait via SKILL (simpler but blocks SKILL channel)
 client.execute_skill(f'maeRunSimulation(?session "{session}")')
 client.execute_skill("maeWaitUntilDone('All)", timeout=300)
 
