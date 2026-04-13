@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Add vias with both the by-name and raw-viaDef APIs."""
+"""Add vias with both the by-name and raw-viaDef APIs.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+
+Customize VIA_NAME below to match a via definition in your PDK techfile
+(e.g. M1_M2, M2_M3, etc.).  Check via names via Virtuoso UI:
+  Execute → Create → Via...
+"""
 
 from __future__ import annotations
 
@@ -16,7 +25,13 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_via_def_expr_from_name as via_def_from_name,
 )
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK
+# ----------------------------------------------------------------------
+# Via definition name — must exist in your PDK techfile
 VIA_NAME = "M2_M1"
+# ----------------------------------------------------------------------
+
 BY_NAME_VIA_X = 1.5
 BY_NAME_VIA_Y = 0.25
 RAW_VIA_X = 2.0

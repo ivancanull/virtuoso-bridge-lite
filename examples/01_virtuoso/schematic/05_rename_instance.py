@@ -4,6 +4,8 @@
 Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - A schematic open in Virtuoso (e.g. created by 01a_create_rc_stepwise.py)
+
+Customize RENAMES below to specify which instances to rename and their new names.
 """
 
 from __future__ import annotations
@@ -16,13 +18,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from _timing import format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
 
+# ----------------------------------------------------------------------
+# Customize: list of (old_name, new_name) pairs to rename
+# ----------------------------------------------------------------------
+RENAMES = [("I0", "IAAA_RENAMED"), ("R0", "RBBB_RENAMED")]
+# ----------------------------------------------------------------------
+
 
 def main() -> int:
     client = VirtuosoClient.from_env()
 
-    renames = [("I0", "IAAA_RENAMED"), ("R0", "RBBB_RENAMED")]
-
-    for old, new in renames:
+    for old, new in RENAMES:
         r = client.execute_skill(f'''
 let((cv inst)
   cv = geGetEditCellView()

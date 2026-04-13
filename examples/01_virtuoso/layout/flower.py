@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Draw a flower in Virtuoso layout using polygons."""
+"""Draw a flower in Virtuoso layout using polygons.
+
+Usage::
+
+    python flower.py <LIB>
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+
+Customize the LAYER constants below to match your PDK metal stack.
+"""
 
 from __future__ import annotations
 
@@ -29,12 +39,21 @@ PETAL_B = 1.2    # semi-minor axis (petal width), um
 PETAL_D = 3.2    # petal center distance from origin, um
 CENTER_R = 1.8   # center circle radius, um
 
-# Alternate two layers for petals so adjacent ones contrast in color
+# ----------------------------------------------------------------------
+# Customize to match your PDK metal stack
+# ----------------------------------------------------------------------
+# Alternate two layers for petals so adjacent ones contrast in color.
+# All layers listed here must be defined in your PDK techfile.
 PETAL_LAYERS = [("M3", "drawing"), ("M4", "drawing")]
 CENTER_LAYER = ("M5", "drawing")
 STEM_LAYER   = ("M1", "drawing")
 LEAF_LAYER   = ("M2", "drawing")
 LABEL_LAYER  = ("M1", "pin")
+
+# Available font names: "roman", "default", "times", "courier",
+# "helvetica", "symbol", etc.  "roman" is the safest cross-PDK choice.
+FONT = "roman"
+# ----------------------------------------------------------------------
 
 
 def ellipse_pts(
@@ -81,7 +100,7 @@ def main() -> int:
         layout.add(polygon(*LEAF_LAYER, leaf_r))
 
         # -- Label -----------------------------------------------------------------
-        layout.add(label(*LABEL_LAYER, 0.0, -16.2, "FLOWER", "centerLeft", "R0", "default", 0.6))
+        layout.add(label(*LABEL_LAYER, 0.0, -16.2, "FLOWER", "centerLeft", "R0", FONT, 0.6))
 
         layout.add(fit_view())
 

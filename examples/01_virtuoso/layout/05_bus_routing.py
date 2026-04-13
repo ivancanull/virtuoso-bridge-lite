@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Add an 8-bit labeled bus route to the current layout view."""
+"""Add an 8-bit labeled bus route to the current layout view.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+
+Customize LAYERS, LABEL_LAYER and FONT below to match your PDK techfile.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +22,13 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_create_label as label,
 )
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK metal stack
+# ----------------------------------------------------------------------
+# Metal layer(s) for bus wires — must be defined in your PDK techfile
 LAYERS    = ["M4"]
+# ----------------------------------------------------------------------
+
 BUS_WIDTH = 8
 
 # Routing parameters
@@ -25,8 +38,17 @@ X_START    = 0.0
 X_END      = 5.0
 Y_BASE     = 2.0   # Y of bit 0 (CODE<0>); higher bits increment upward
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK techfile
+# ----------------------------------------------------------------------
+# Layer/purpose for bus labels — must be defined in your PDK techfile
 LABEL_LAYER  = "M4"
 LABEL_HEIGHT = 0.1  # um
+
+# Available font names: "roman", "default", "times", "courier",
+# "helvetica", "symbol", etc.  "roman" is the safest cross-PDK choice.
+FONT = "roman"
+# ----------------------------------------------------------------------
 
 
 def main() -> int:
@@ -56,7 +78,7 @@ def main() -> int:
                     LABEL_LAYER, "pin",
                     X_START, y,
                     f"CODE<{bit}>",
-                    "centerLeft", "R0", "default",
+                    "centerLeft", "R0", FONT,
                     LABEL_HEIGHT,
                 ))
 

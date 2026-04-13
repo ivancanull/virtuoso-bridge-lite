@@ -11,6 +11,7 @@ Usage::
 
 Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
+  - analogLib cell masters (vdc, res, cap) available in your Virtuoso install
 """
 
 from __future__ import annotations

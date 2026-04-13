@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Add the same route across layout layers M2 through M7."""
+"""Add the same route across layout layers M2 through M7.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+
+Customize LAYERS below to match the metal stack in your PDK techfile.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,12 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_create_path as path,
 )
 
+# ----------------------------------------------------------------------
+# Customize to match your PDK metal stack
+# ----------------------------------------------------------------------
+# List of metal layers available in your PDK (in routing order, bottom→top)
 LAYERS = ["M2", "M3", "M4", "M5", "M6", "M7"]
+# ----------------------------------------------------------------------
 
 # Routing parameters
 PATH_WIDTH = 0.1   # um

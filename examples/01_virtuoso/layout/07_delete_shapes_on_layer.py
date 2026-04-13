@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Delete all shapes on a target layer and purpose from the current layout."""
+"""Delete all shapes on a target layer and purpose from the current layout.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso
+
+Customize DELETE_LAYER and DELETE_PURPOSE below to match your PDK techfile.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +17,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from _timing import decode_skill, format_elapsed, timed_call
 from virtuoso_bridge import VirtuosoClient
-DELETE_LAYER = "M3"
+
+# ----------------------------------------------------------------------
+# Customize to match the layer/purpose you want to delete
+# ----------------------------------------------------------------------
+# Must be defined in your PDK techfile
+DELETE_LAYER   = "M3"
 DELETE_PURPOSE = "drawing"
+# ----------------------------------------------------------------------
 
 
 def main() -> int:

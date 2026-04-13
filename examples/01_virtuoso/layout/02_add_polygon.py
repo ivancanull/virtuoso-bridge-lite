@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Add a polygon to the current layout view."""
+"""Add a polygon to the current layout view.
+
+Prerequisites:
+  - virtuoso-bridge service running (virtuoso-bridge start)
+  - A layout cellview must be open in Virtuoso (reads it via get_current_design)
+
+Customize LAYER and PURPOSE below to match your PDK techfile.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,7 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_create_polygon as polygon,
 )
 
-LAYER = "M3"
+LAYER = "edgeLayer"
 PURPOSE = "drawing"
 POINTS = [
     (0.5, 1.8),
