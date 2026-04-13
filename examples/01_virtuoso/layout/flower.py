@@ -5,6 +5,14 @@ Usage::
 
     python flower.py <LIB>
 
+    <LIB> is required — the Virtuoso library where the cell "flower"
+    will be created.  Example::
+
+        python flower.py testlib
+
+    Running this script from VSCode without passing <LIB> will NOT work:
+    the script will exit with a clear error, and Virtuoso will show nothing.
+
 Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
 
@@ -27,10 +35,6 @@ from virtuoso_bridge.virtuoso.layout.ops import (
     layout_fit_view as fit_view,
 )
 
-if len(sys.argv) < 2:
-    print(f"Usage: python {Path(__file__).name} <LIB>")
-    raise SystemExit(1)
-LIB = sys.argv[1]
 CELL = "flower"
 
 N_PETALS = 8
@@ -56,6 +60,11 @@ FONT = "roman"
 # ----------------------------------------------------------------------
 
 
+def _die(message: str) -> None:
+    print(f"[ERROR] {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def ellipse_pts(
     cx: float, cy: float, a: float, b: float, angle: float, n: int = 28
 ) -> list[tuple[float, float]]:
@@ -70,10 +79,47 @@ def ellipse_pts(
 
 
 def main() -> int:
-    client = VirtuosoClient.from_env()
-    print(f"[Flower] Creating '{CELL}' in '{LIB}' ...")
+    # ------------------------------------------------------------------
+    # Argument check — this script MUST be run with a library argument.
+    # Clicking "Run" in VSCode without passing <LIB> will silently do
+    # nothing in Virtuoso, so we abort with a clear message instead.
+    # ------------------------------------------------------------------
+    if len(sys.argv) < 2:
+        print("=" * 60, file=sys.stderr)
+        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
+        print()
+        print(
+            f" Usage: python {Path(__file__).name} <LIB>\n"
+            " Example: python flower.py lifangshi\n",
+            file=sys.stderr,
+        )
+        print(
+            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
+            "       work — VSCode does not pass command-line arguments by default.\n"
+            "       Either run from a terminal, configure a launch.json, or\n"
+            "       edit the PDK values in this file directly.\n",
+            file=sys.stderr,
+        )
+        print(
+            " If Virtuoso shows a blank cell after running, check that:\n"
+            "   1. <LIB> is a library that exists in your Virtuoso setup\n"
+            "   2. All *LAYER constants match your PDK techfile layers\n",
+            file=sys.stderr,
+        )
+        print("=" * 60, file=sys.stderr)
+        return 1
 
-    with client.layout.edit(LIB, CELL, mode="w") as layout:
+    lib = sys.argv[1]
+
+    client = VirtuosoClient.from_env()
+    print(f"[Flower] Creating '{CELL}' in '{lib}' ...")
+    print(f"  Layer (petals) : {[p[0] for p in PETAL_LAYERS]}")
+    print(f"  Layer (stem)   : {STEM_LAYER[0]}")
+    print(f"  Layer (label)  : {LABEL_LAYER[0]}")
+    print(f"  Font           : {FONT}")
+    print()
+
+    with client.layout.edit(lib, CELL, mode="w") as layout:
 
         # -- Petals ----------------------------------------------------------------
         for i in range(N_PETALS):
@@ -104,8 +150,9 @@ def main() -> int:
 
         layout.add(fit_view())
 
-    client.open_window(LIB, CELL, view="layout")
-    print("[Done] Flower layout created and opened.")
+    client.open_window(lib, CELL, view="layout")
+    print("[Done] Flower layout created — check the Virtuoso window.")
+    print("       If the cell is blank, verify all *LAYER constants above.")
     return 0
 
 

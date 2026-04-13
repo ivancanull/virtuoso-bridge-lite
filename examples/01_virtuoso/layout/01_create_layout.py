@@ -8,7 +8,7 @@ Usage::
     <LIB> is required — the target Virtuoso library where the layout cell
     will be created.  Example::
 
-        python 01_create_layout.py lifangshi
+        python 01_create_layout.py testlib
 
     Running this script from VSCode without passing <LIB> will NOT work:
     the script will exit with a clear error, and Virtuoso will show nothing.

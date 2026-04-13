@@ -5,6 +5,15 @@ Reuses existing Maestro GUI if open, otherwise opens fresh.
 Can be run multiple times — each run starts a new simulation.
 
 Prerequisite: run 06a_rc_create.py first.
+
+Usage::
+
+    python 06b_rc_simulate_and_read.py <LIB>
+
+    <LIB> is required — must match the library used in 06a_rc_create.py.
+    Example::
+
+        python 06b_rc_simulate_and_read.py testlib
 """
 
 import re
@@ -19,10 +28,6 @@ from virtuoso_bridge.virtuoso.maestro import (
     read_results, export_waveform, save_setup, wait_until_done,
 )
 
-if len(sys.argv) < 2:
-    print(f"Usage: python {Path(__file__).name} <LIB>")
-    raise SystemExit(1)
-LIB = sys.argv[1]
 CELL = "TB_RC_FILTER"
 
 
@@ -38,7 +43,7 @@ def parse_wave_file(path: str) -> list[tuple[float, float]]:
     return pairs
 
 
-def ensure_gui(client: VirtuosoClient) -> None:
+def ensure_gui(client: VirtuosoClient, lib: str) -> None:
     """Make sure maestro GUI is open and editable. Reuse if possible."""
     # Check for existing valid session
     r = client.execute_skill('''
@@ -50,22 +55,41 @@ let((s) s = nil
 
     if session and session != "nil":
         # Session exists — just save to keep it clean
-        save_setup(client, LIB, CELL)
+        save_setup(client, lib, CELL)
         return
 
     # No valid session — open fresh
     client.execute_skill(
-        f'deOpenCellView("{LIB}" "{CELL}" "maestro" "maestro" nil "r")')
+        f'deOpenCellView("{lib}" "{CELL}" "maestro" "maestro" nil "r")')
     client.execute_skill('maeMakeEditable()')
 
 
 def main() -> int:
+    if len(sys.argv) < 2:
+        print("=" * 60, file=sys.stderr)
+        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
+        print()
+        print(
+            f" Usage: python {Path(__file__).name} <LIB>\n"
+            " Example: python 06b_rc_simulate_and_read.py lifangshi\n",
+            file=sys.stderr,
+        )
+        print(
+            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
+            "       work — VSCode does not pass command-line arguments by default.\n",
+            file=sys.stderr,
+        )
+        print("=" * 60, file=sys.stderr)
+        return 1
+
+    lib = sys.argv[1]
+
     client = VirtuosoClient.from_env()
-    print(f"[info] {LIB}/{CELL}")
+    print(f"[info] {lib}/{CELL}")
     t_total = time.time()
 
     # 1. Ensure GUI is open
-    ensure_gui(client)
+    ensure_gui(client, lib)
     print("[gui] Ready")
 
     # 2. Run simulation
@@ -79,7 +103,7 @@ def main() -> int:
         # Force close everything and retry
         client.execute_skill(f'''
 foreach(s maeGetSessions()
-  errset(maeSaveSetup(?lib "{LIB}" ?cell "{CELL}" ?view "maestro" ?session s))
+  errset(maeSaveSetup(?lib "{lib}" ?cell "{CELL}" ?view "maestro" ?session s))
   errset(maeCloseSession(?session s ?forceClose t)))
 foreach(win hiGetWindowList()
   let((n) n = hiGetWindowName(win)
@@ -90,7 +114,7 @@ t
 ''')
         time.sleep(1)
         client.execute_skill(
-            f'deOpenCellView("{LIB}" "{CELL}" "maestro" "maestro" nil "r")')
+            f'deOpenCellView("{lib}" "{CELL}" "maestro" "maestro" nil "r")')
         client.execute_skill('maeMakeEditable()')
         r = client.execute_skill('maeRunSimulation()')
         run_name = (r.output or "").strip('"')
@@ -114,7 +138,7 @@ let((s) s = nil
     session = (r.output or "").strip('"')
 
     print("\n=== Results ===")
-    results = read_results(client, session, lib=LIB, cell=CELL)
+    results = read_results(client, session, lib=lib, cell=CELL)
     if results:
         for key, (expr, raw) in results.items():
             print(f"[{key}] {expr}")
@@ -159,7 +183,7 @@ let((s) s = nil
 
         # 6. Restore latest history in GUI + save
         client.execute_skill(f'maeRestoreHistory("{history}")')
-        save_setup(client, LIB, CELL)
+        save_setup(client, lib, CELL)
         print(f"\n[gui] Showing {history}")
 
     print(f"[total] {time.time() - t_total:.1f}s")

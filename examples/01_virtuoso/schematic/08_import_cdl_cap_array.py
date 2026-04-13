@@ -8,6 +8,15 @@ Circuit:
     cap_unit:     single 10fF capacitor (TOP, BOT)
     cap_array_4b: 15 unit caps, weights [1,2,4,8], pins TOP + BOT<3:0>
 
+Usage::
+
+    python 08_import_cdl_cap_array.py <LIB>
+
+    <LIB> is required — the Virtuoso library where the schematic will be created.
+
+    Example::
+    python 08_import_cdl_cap_array.py testlib
+
 Prerequisites:
 - virtuoso-bridge tunnel running
 - spiceIn on remote (auto-detected from Cadence install)
@@ -32,11 +41,6 @@ from virtuoso_bridge.transport.remote_paths import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-if len(sys.argv) < 2:
-    print(f"Usage: python {Path(__file__).name} <LIB>")
-    raise SystemExit(1)
-LIB = sys.argv[1]
 
 CDL = """\
 .SUBCKT cap_unit TOP BOT
@@ -90,6 +94,28 @@ def _ssh_cmd(client: VirtuosoClient) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # ------------------------------------------------------------------
+    # Argument check
+    # ------------------------------------------------------------------
+    if len(sys.argv) < 2:
+        print("=" * 60, file=sys.stderr)
+        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
+        print()
+        print(
+            f" Usage: python {Path(__file__).name} <LIB>\n"
+            " Example: python 08_import_cdl_cap_array.py lifangshi\n",
+            file=sys.stderr,
+        )
+        print(
+            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
+            "       work — VSCode does not pass command-line arguments by default.\n",
+            file=sys.stderr,
+        )
+        print("=" * 60, file=sys.stderr)
+        return 1
+
+    lib = sys.argv[1]
+
     client = VirtuosoClient.from_env()
 
     # Discover paths from running Virtuoso
@@ -104,7 +130,7 @@ def main() -> int:
     cds_inst = r.output.strip('"')
     spicein = f"{cds_inst}/bin/spiceIn"
 
-    r = client.execute_skill(f'ddGetObj("{LIB}")~>writePath')
+    r = client.execute_skill(f'ddGetObj("{lib}")~>writePath')
     work_dir = str(Path(r.output.strip('"')).parent)
 
     username = resolve_remote_username(
@@ -133,7 +159,7 @@ export PATH=$CDS_INST_DIR/bin:$CDS_INST_DIR/tools/bin:$PATH
 export LD_LIBRARY_PATH="{env.get('LD_LIBRARY_PATH', '')}"
 cd {work_dir}
 {spicein} -language SPICE -netlistFile {cdl_path} \\
-  -outputLib {LIB} -reflibList "analogLib basic" \\
+  -outputLib {lib} -reflibList "analogLib basic" \\
   -devmapFile {devmap_path}
 """
     script_path = f"{remote_tmp}/run.sh"
@@ -153,14 +179,14 @@ cd {work_dir}
 
     # 3. Generate symbol for cap_unit
     client.execute_skill("ddUpdateLibList()")
-    client.execute_skill(f'schPinListToSymbol("{LIB}" "cap_unit" "symbol" schSchemToPinList("{LIB}" "cap_unit" "schematic"))')
-    r = client.execute_skill(f'ddGetObj("{LIB}" "cap_unit")~>views~>name')
+    client.execute_skill(f'schPinListToSymbol("{lib}" "cap_unit" "symbol" schSchemToPinList("{lib}" "cap_unit" "schematic"))')
+    r = client.execute_skill(f'ddGetObj("{lib}" "cap_unit")~>views~>name')
     print(f"[symbol] cap_unit: {r.output}")
 
     # 4. Open
-    r = client.execute_skill(f'ddGetObj("{LIB}" "cap_array_4b")~>views~>name')
+    r = client.execute_skill(f'ddGetObj("{lib}" "cap_array_4b")~>views~>name')
     print(f"[verify] cap_array_4b: {r.output}")
-    client.open_window(LIB, "cap_array_4b", view="schematic")
+    client.open_window(lib, "cap_array_4b", view="schematic")
     print("[done] Opened cap_array_4b")
 
     return 0

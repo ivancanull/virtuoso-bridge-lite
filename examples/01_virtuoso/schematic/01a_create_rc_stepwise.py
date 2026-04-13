@@ -7,6 +7,11 @@ Usage::
 
     python 01a_create_rc_stepwise.py <LIB>
 
+    <LIB> is required — the Virtuoso library where the schematic will be created.
+
+    Example::
+    python 01a_create_rc_stepwise.py testlib
+
 Prerequisites:
   - virtuoso-bridge service running (virtuoso-bridge start)
   - analogLib cell masters (vdc, res, cap) available in your Virtuoso install
@@ -29,9 +34,26 @@ from virtuoso_bridge.virtuoso.schematic.ops import (
 
 
 def main() -> int:
+    # ------------------------------------------------------------------
+    # Argument check
+    # ------------------------------------------------------------------
     if len(sys.argv) < 2:
-        print(f"Usage: python {Path(__file__).name} <LIB>")
+        print("=" * 60, file=sys.stderr)
+        print(" ERROR: missing required argument <LIB>", file=sys.stderr)
+        print()
+        print(
+            f" Usage: python {Path(__file__).name} <LIB>\n"
+            " Example: python 01a_create_rc_stepwise.py lifangshi\n",
+            file=sys.stderr,
+        )
+        print(
+            " NOTE: Running this script from VSCode (Ctrl+F5 / F5) will NOT\n"
+            "       work — VSCode does not pass command-line arguments by default.\n",
+            file=sys.stderr,
+        )
+        print("=" * 60, file=sys.stderr)
         return 1
+
     lib = sys.argv[1]
     cell = f"rc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     client = VirtuosoClient.from_env()
