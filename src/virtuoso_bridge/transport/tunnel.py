@@ -254,7 +254,7 @@ class SSHClient:
             '(test -x "$CDSHOME/tools.lnx86/python/64bit/bin/python3" && '
             '$CDSHOME/tools.lnx86/python/64bit/bin/python3 --version 2>&1 && '
             'echo "CMD:$CDSHOME/tools.lnx86/python/64bit/bin/python3") || '
-            'python3 --version 2>&1 && echo "CMD:python3" || '
+            '(python3 --version 2>&1 && echo "CMD:python3") || '
             '(python --version 2>&1 && echo "CMD:python") || '
             '(python2.7 --version 2>&1 && echo "CMD:python2.7") || '
             'echo "CMD:NONE"'

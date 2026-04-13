@@ -389,7 +389,7 @@ Apply these rules whenever you read or export **any** maestro output (scalar or 
 
 **Debug with screenshots:** if simulation appears stuck or results are unexpected, capture the Maestro window to see its current state:
 
-```python
+```
 client.execute_skill('''
 hiWindowSaveImage(
     ?target hiGetCurrentWindow()
@@ -402,6 +402,94 @@ client.download_file("/tmp/debug_maestro.png", "output/debug_maestro.png")
 ```
 
 This reveals dialog boxes, error messages, or unexpected variable values that are invisible through the SKILL channel alone.
+
+### Root Cause: Why maeGetOutputValue returns nil for computed expressions
+
+**Symptom:** `maeGetOutputValue("bandwidth(...)" testName)` returns nil, but `maeGetOutputValue("Noise_rms_out" testName)` returns a value.
+
+**Root Cause:** The PSF directory contains no actual waveform data files. Check with:
+
+```bash
+# SSH to remote and check PSF directory
+ssh zhangz@zhangz-wei "ls /server_local_ssd/.../Interactive.N/psf/<test>/psf/"
+# Expected: .raw, simdata, spectre.log files
+# Actual: only spectre.out, variables_file (NO waveform data!)
+```
+
+**Why this happens:**
+- Maestro saves only **pre-computed scalar outputs** (like `Noise_rms_out`) to the RDB
+- Raw waveforms (VOUT, VSIN signals) are NOT saved to PSF unless "save=all" is enabled
+- Computed expressions (bandwidth, dB20, value) need the waveform data to calculate — returns nil
+
+**Check the RDB directly:**
+
+```bash
+ssh zhangz@zhangz-wei "sqlite3 .../Interactive.N.rdb 'SELECT * FROM resultValue'"
+# Returns rows like:
+# 1|7|0.000469         -> Noise_rms_out scalar (saved)
+# 1|8|wave             -> VF(/VOUT)/VF(/VSIN) is a waveform reference, not saved!
+```
+
+**Solution:** Enable "save all" option before running simulation:
+
+```python
+client.execute_skill(f'maeSetEnvOption("{test}" ?option "save" ?value "all")')
+client.execute_skill('maeSaveSetup()')
+```
+
+### Reliable Result Reading: Parse the Log File
+
+When Maestro OCEAN functions fail (due to missing PSF waveform data), parse the `.log` file:
+
+```python
+def read_maestro_results_from_log(client, LIB, CELL, history):
+    """Read simulation results from the log file - most reliable method."""
+    
+    # Determine base path - adjust for your project structure
+    base = f"/home/zhangz/TSMC28N/2025_LLM_AGENT/{LIB}"
+    log_path = f"{base}/{CELL}/maestro/results/maestro/{history}.log"
+    client.download_file(log_path, "/tmp/sim.log")
+    
+    # Parse tab-separated format: "expression\t\tvalue"
+    results = {}
+    with open("/tmp/sim.log") as f:
+        for line in f:
+            if "\t\t" in line:
+                parts = line.rstrip().split("\t\t")
+                if len(parts) >= 2:
+                    name = parts[0].strip()
+                    value = parts[1].strip()
+                    # Skip header lines
+                    if name and value and "corner" not in name.lower():
+                        results[name] = value
+    return results
+
+# Full workflow:
+from virtuoso_bridge import VirtuosoClient
+from virtuoso_bridge.virtuoso.maestro import open_gui_session, run_and_wait, close_gui_session
+
+client = VirtuosoClient.from_env()
+LIB, CELL = "PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC"
+
+session = open_gui_session(client, LIB, CELL)  # GUI mode required for results
+history, _ = run_and_wait(client, session=session, timeout=300)
+h = history.strip('"')
+
+results = read_maestro_results_from_log(client, LIB, CELL, h)
+print(results)
+# {'bandwidth(...)': '1.64M', 'dB20(...)': '10.93', ...}
+
+close_gui_session(client, session, save=False)
+```
+
+**Log format in the file:**
+
+```
+bandwidth(abs((VF("/VOUT") / VF("/VSIN"))) 3 "low")		1.64M
+dB20(value(abs((VF("/VOUT") / VF("/VSIN"))) 10000))		10.93
+value(abs((VF("/VOUT") / VF("/VSIN"))) 10000)		3.519
+Noise_rms_out						469u
+```
 
 ### SKILL channel timeout — diagnosis and recovery
 
