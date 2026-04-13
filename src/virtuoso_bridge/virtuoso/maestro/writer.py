@@ -4,7 +4,12 @@ All functions take a session string and call mae* SKILL functions.
 They return the raw SKILL output string.
 """
 
+import logging
+
 from virtuoso_bridge import VirtuosoClient
+
+
+logger = logging.getLogger(__name__)
 
 
 def _q(client: VirtuosoClient, expr: str, timeout: int | None = None) -> str:
@@ -386,6 +391,8 @@ def _diagnose_run_not_started(client: VirtuosoClient, session: str) -> dict[str,
 
     if info["test"]:
         try:
+            # Best-effort probe: some older Virtuoso/Maestro environments may not
+            # expose maeGetEnabledAnalysis, so keep diagnostics partial on failure.
             enabled = _q(
                 client,
                 f'maeGetEnabledAnalysis("{info["test"]}" ?session "{session}")',
@@ -489,6 +496,10 @@ procedure(_vb_sim_done_{nonce}(session runID)
             extra = (
                 f"session={session}, test={test}, enabled_analyses={analyses}, "
                 f"explorer_window={explorer}, current_form={form}."
+            )
+            logger.warning(
+                "Simulation did not start after diagnostics/recovery attempt: %s",
+                extra,
             )
             raise RuntimeError(
                 "maeRunSimulation returned nil (simulation not started). "
