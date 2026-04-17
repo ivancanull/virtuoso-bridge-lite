@@ -427,7 +427,7 @@ class SSHClient:
                 continue
             raise RuntimeError(f"SSH tunnel failed: {err_msg.strip()}")
 
-        raise RuntimeError(f"No free local port found after {max_attempts} attempts ({self._local_port}–{local_port - 1})")
+        raise RuntimeError(f"No free local port found after {max_attempts} attempts ({self._local_port}-{local_port - 1})")
 
     # -- high-level lifecycle -----------------------------------------------
 
