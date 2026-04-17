@@ -815,7 +815,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _make_stdio_safe() -> None:
+    # Window/cell names may contain non-ASCII chars (e.g. '®' in Cadence
+    # titles). On hosts whose locale is GBK / cp1252 / etc., printing them
+    # raises UnicodeEncodeError. Switch to errors='replace' so CLI output
+    # never aborts on a stray byte.
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _make_stdio_safe()
     parser = build_parser()
     args = parser.parse_args(argv)
     dispatch = {
