@@ -28,6 +28,9 @@ RBDLog = nil                                                                    
 ; clearing RBIpc would make RBStart spawn a second daemon -> bind failure (exit 1).
 unless(boundp('RBIpc) RBIpc = 'unbound)
 
+; Ring buffer for daemon stderr; flushed to CIW only on non-zero exit.
+unless(boundp('RBStderrBuf) RBStderrBuf = "")
+
 procedure(RBIpcDataHandler(ipcId data)
   ; Handler for successful data received from the Python daemon.
   ; Code is executed via evalstring(), which bypasses CIW's interactive loop.
@@ -49,8 +52,12 @@ procedure(RBIpcDataHandler(ipcId data)
 )
 
 procedure(RBIpcErrHandler(ipcId data)
-    ; Daemon process stderr etc.; not echoed to CIW (use RBDLog or host logs if needed)
-    nil
+    ; Buffer daemon stderr; emitted to CIW only on non-zero exit
+    ; (RBIpcFinishHandler). Avoids flooding CIW with routine startup
+    ; chatter / Python warnings while preserving fatal-error context.
+    RBStderrBuf = strcat(RBStderrBuf data)
+    when(strlen(RBStderrBuf) > 8192
+        RBStderrBuf = substring(RBStderrBuf strlen(RBStderrBuf)-8191 8192))
 )
 
 procedure(RBIpcFinishHandler(ipcId data)
@@ -58,6 +65,9 @@ procedure(RBIpcFinishHandler(ipcId data)
   let((exitStatus)
 	exitStatus = ipcGetExitStatus(ipcId)
     printf("[RAMIC Bridge (%L)] exit at (%s) with state = %L\n" ipcId getCurrentTime() exitStatus)
+    when(exitStatus != 0 && strlen(RBStderrBuf) > 0
+        printf("[RAMIC Bridge stderr]\n%s\n" RBStderrBuf))
+    RBStderrBuf = ""
   )
 )
 
