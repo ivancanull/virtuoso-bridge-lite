@@ -15,7 +15,7 @@ import re
 
 from virtuoso_bridge import VirtuosoClient
 
-from ._parse_skill import _parse_skill_str_list
+from ._parse_skill import _parse_skill_str_list, _tokenize_top_level
 from ._parse_sdb import parse_tests_from_sdb_xml
 from .remote_io import read_remote_file
 
@@ -136,6 +136,130 @@ def detect_session_for_focus(client: VirtuosoClient, *,
     return None
 
 
+def _fetch_window_state(client: VirtuosoClient) -> tuple[str, list[str], list[str]]:
+    """One SKILL round-trip: (focused_name, all_names, all_sessions).
+
+    No ``geGetEditCellView`` / ``geGetWindowCellView`` here — those warn
+    on non-graphic windows like the maestro Assembler (GE-2067).
+    ``maeGetSessions`` is requested instead of per-session ``maeGetSetup``
+    because we don't know which session yet.
+    """
+    r = client.execute_skill(
+        'let((cw) '
+        'cw = hiGetCurrentWindow() '
+        'list('
+        '  if(cw hiGetWindowName(cw) nil) '
+        '  mapcar(lambda((w) hiGetWindowName(w)) hiGetWindowList()) '
+        '  maeGetSessions()))'
+    )
+    raw = r.output or ""
+    body = raw.strip()
+    if body.startswith("(") and body.endswith(")"):
+        body = body[1:-1]
+    # Three slots: curName (quoted string or `nil`), allNames list,
+    # sessions list.  The first slot can be either kind, so ask for both.
+    chunks = _tokenize_top_level(
+        body, include_strings=True, include_atoms=True, max_tokens=3,
+    )
+    while len(chunks) < 3:
+        chunks.append("nil")
+    cur_name = chunks[0].strip().strip('"') if chunks[0] != "nil" else ""
+    return cur_name, _parse_skill_str_list(chunks[1]), _parse_skill_str_list(chunks[2])
+
+
+def _fetch_viewdir_listing(client: VirtuosoClient, lib: str, cell: str,
+                            view: str) -> tuple[str, list[str], list[str]]:
+    """One SKILL round-trip: (lib_path, view_dir_files, history_dir_files).
+
+    Empty strings / lists on missing lib or unresolvable directory.
+    """
+    if not (lib and cell and view):
+        return "", [], []
+    r = client.execute_skill(
+        f'let((libObj libPath viewDir histBase) '
+        f'libObj = ddGetObj("{lib}") '
+        f'libPath = if(libObj libObj~>readPath "") '
+        f'viewDir = strcat(libPath "/{cell}/{view}") '
+        f'histBase = strcat(viewDir "/results/maestro") '
+        f'list(libPath '
+        f'     if(isDir(viewDir) getDirFiles(viewDir) nil) '
+        f'     if(isDir(histBase) getDirFiles(histBase) nil)))'
+    )
+    raw = (r.output or "").strip()
+    if not (raw.startswith("(") and raw.endswith(")")):
+        return "", [], []
+    inner = raw[1:-1]
+    m = re.match(r'\s*"([^"]*)"\s*(.*)$', inner, re.DOTALL)
+    if not m:
+        return "", [], []
+    lib_path = m.group(1)
+    # Remaining body is two lists: (view-dir-files) (hist-files).
+    lists = _tokenize_top_level(
+        m.group(2), include_groups=True,
+        include_strings=False, include_atoms=False, max_tokens=2,
+    )
+    view_files = _parse_skill_str_list(lists[0]) if len(lists) >= 1 else []
+    hist_files = _parse_skill_str_list(lists[1]) if len(lists) >= 2 else []
+    return lib_path, view_files, hist_files
+
+
+def _pick_sdb_file(view_files: list[str], view: str) -> str:
+    """Pick the canonical sdb from a view-dir listing.
+
+    Prefer ``{view}.sdb`` (OA convention).  Otherwise the first file
+    matching the strict ``^[^.]+\\.sdb$`` pattern (rejecting ``.cdslck``,
+    ``.old``, ``.bak``, etc.).  Returns ``""`` when nothing plausible.
+    """
+    sdb_files = [f for f in view_files if _CANONICAL_SDB_RE.match(f)]
+    if not sdb_files:
+        return ""
+    preferred = f"{view}.sdb"
+    return preferred if preferred in sdb_files else sdb_files[0]
+
+
+def _natural_sort_histories(hist_files: list[str]) -> list[str]:
+    """Extract history names from a ``results/maestro`` dir listing.
+
+    Histories anchor on ``<name>.rdb`` metadata files; bare directories
+    matching Cadence's Interactive.N / MonteCarlo.N shape are also accepted
+    (some setups store both, some only the dir).  Sorts naturally so
+    ``Interactive.2`` < ``Interactive.10``; named histories
+    (``closeloop_PVT_postsim``) sort alphabetically among peers.
+    """
+    seen: set[str] = set()
+    for h in hist_files:
+        if _HISTORY_RDB_RE.match(h):
+            seen.add(h[:-4])             # strip .rdb
+        elif _HISTORY_DIR_RE.match(h):
+            seen.add(h)
+
+    def _natkey(s: str):
+        return [
+            (int(tok) if tok.isdigit() else 0, tok)
+            for tok in re.findall(r"\d+|\D+", s)
+        ]
+
+    return sorted(seen, key=_natkey)
+
+
+def _resolve_session(client: VirtuosoClient, all_sessions: list[str],
+                     sdb_path: str, sdb_cache_path: str | None) -> str:
+    """Map focused cellview → exactly one open maestro session.
+
+    Trivial cases: 0 sessions → "", 1 session → it.  Otherwise match the
+    focused sdb's test-name set against each session's tests.
+    """
+    if not all_sessions:
+        return ""
+    if len(all_sessions) == 1:
+        return all_sessions[0]
+    if not sdb_path:
+        return ""
+    return detect_session_for_focus(
+        client, sdb_path=sdb_path, sdb_cache_path=sdb_cache_path,
+    ) or ""
+
+
 def read_session_info(client: VirtuosoClient, *,
                       sdb_cache_path: str | None = None) -> dict:
     """Read maestro session metadata for the *currently-focused* window.
@@ -146,231 +270,53 @@ def read_session_info(client: VirtuosoClient, *,
     the return shape internally consistent (lib/cell/view/session/test
     all describe the same cellview).
 
-    Steps:
-      1. Parse the focused window title → lib / cell / view /
-         editable / unsaved_changes.
-      2. List the view directory on disk → lib_path, history list,
-         canonical sdb filename.
-      3. Match the focused sdb's test-name set against
-         ``maeGetSetup`` for each open maestro session → resolved session.
-      4. Query the resolved session for its test name.
-
-    Pass ``sdb_cache_path`` to persist the downloaded ``maestro.sdb``
-    (re-used by ``read_corners``), so auto-detect costs at most one scp
-    total.
-
-    The view name is extracted from the title rather than hardcoded, so
-    ``maestro`` / ``maestro_MC`` / any other view works.  The sdb filename is
-    discovered by listing the view directory and filtering with a strict
-    ``^[^.]+\\.sdb$`` regex (rejecting ``.cdslck``, ``.old``, ``.bak``, etc.).
+    Pipeline:
+      1. :func:`_fetch_window_state` — 1 SKILL call → focused title,
+         every window title, open sessions list.
+      2. :func:`_match_mae_title` — regex the focused title (fall back
+         to scanning all titles) → lib / cell / view / mode / unsaved.
+      3. :func:`_fetch_viewdir_listing` — 1 SKILL call → lib_path, view
+         directory files, history directory files.
+      4. :func:`_pick_sdb_file` + :func:`_natural_sort_histories` —
+         filter + sort the listings.
+      5. :func:`_resolve_session` — if multiple sessions are open, match
+         the focused sdb's tests against each session.
+      6. ``_get_test`` — pull the resolved session's first test name.
     """
-    # Import locally to avoid a circular import with probes.
-    from ._skill import _get_test
+    from ._skill import _get_test           # local to avoid probes cycle
 
-    # --- Round 1: current window + all window names + list of maestro sessions
-    # Note: no geGetEditCellView / geGetWindowCellView here — those warn on
-    # non-graphic windows like the maestro Assembler (GE-2067).
-    # We request maeGetSessions() instead of maeGetSetup(?session) because
-    # `session` may be None at this point (auto-detect below).
-    r = client.execute_skill(
-        'let((cw) '
-        'cw = hiGetCurrentWindow() '
-        'list('
-        '  if(cw hiGetWindowName(cw) nil) '
-        '  mapcar(lambda((w) hiGetWindowName(w)) hiGetWindowList()) '
-        '  maeGetSessions()))'
-    )
-    raw = r.output or ""
+    cur_name, all_names, all_sessions = _fetch_window_state(client)
 
-    # Split top-level into three slots:  curName, allNames list, tests list
-    body = raw.strip()
-    if body.startswith("(") and body.endswith(")"):
-        body = body[1:-1]
+    title_match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
+    lib  = title_match.get("lib", "")
+    cell = title_match.get("cell", "")
+    view = title_match.get("view", "")
 
-    chunks: list[str] = []
-    depth = 0
-    start = -1
-    i = 0
-    n = len(body)
-    while i < n and len(chunks) < 3:
-        ch = body[i]
-        # Top-level-only quoted string chunking.  Inside a paren group,
-        # we must NOT treat a `"` as a chunk boundary — we just scan past
-        # its contents without incrementing depth.
-        if depth == 0 and ch == '"' and (i == 0 or body[i - 1] != "\\"):
-            j = i + 1
-            while j < n and not (body[j] == '"' and body[j - 1] != "\\"):
-                j += 1
-            chunks.append(body[i:j + 1])
-            i = j + 1
-            while i < n and body[i].isspace():
-                i += 1
-            continue
-        if depth > 0 and ch == '"':
-            # Skip past an inner string literal without descending/ascending.
-            j = i + 1
-            while j < n and not (body[j] == '"' and body[j - 1] != "\\"):
-                j += 1
-            i = j + 1
-            continue
-        if ch == "(":
-            if depth == 0:
-                start = i
-            depth += 1
-            i += 1
-            continue
-        if ch == ")":
-            depth -= 1
-            if depth == 0 and start >= 0:
-                chunks.append(body[start:i + 1])
-                start = -1
-            i += 1
-            continue
-        if depth == 0 and ch.isspace():
-            i += 1
-            continue
-        if depth == 0:
-            j = i
-            while j < n and not body[j].isspace() and body[j] not in "()":
-                j += 1
-            chunks.append(body[i:j])
-            i = j
-            continue
-        i += 1
-
-    while len(chunks) < 3:
-        chunks.append("nil")
-
-    cur_name = chunks[0].strip().strip('"') if chunks[0] != "nil" else ""
-    all_names = _parse_skill_str_list(chunks[1])
-    all_sessions = _parse_skill_str_list(chunks[2])
-
-    # --- Identify which maestro window the user is on -----------------------
-    # Prefer the focused window; fall back to scanning all windows.
-    match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
-    lib = match.get("lib", "")
-    cell = match.get("cell", "")
-    view = match.get("view", "")
-    application = match.get("application")     # "assembler" / "explorer" / None
-    editable = match.get("editable")           # None if no match
-    unsaved_changes = match.get("unsaved_changes")
-
-    # --- Round 2: lib_path + view-dir listing + history listing ------------
-    lib_path = ""
-    history_list: list[str] = []
-    sdb_files: list[str] = []
-
-    if lib and cell and view:
-        r = client.execute_skill(
-            f'let((libObj libPath viewDir histBase) '
-            f'libObj = ddGetObj("{lib}") '
-            f'libPath = if(libObj libObj~>readPath "") '
-            f'viewDir = strcat(libPath "/{cell}/{view}") '
-            f'histBase = strcat(viewDir "/results/maestro") '
-            f'list(libPath '
-            f'     if(isDir(viewDir) getDirFiles(viewDir) nil) '
-            f'     if(isDir(histBase) getDirFiles(histBase) nil)))'
-        )
-        raw2 = (r.output or "").strip()
-        if raw2.startswith("(") and raw2.endswith(")"):
-            body2 = raw2[1:-1]
-            m = re.match(r'\s*"([^"]*)"\s*(.*)$', body2, re.DOTALL)
-            if m:
-                lib_path = m.group(1)
-                rest = m.group(2).strip()
-                # rest = (view-dir-files) (hist-files)
-                parts2: list[str] = []
-                depth = 0
-                p_start = -1
-                p_in_str = False
-                for j, c in enumerate(rest):
-                    if c == '"' and (j == 0 or rest[j - 1] != "\\"):
-                        p_in_str = not p_in_str
-                    if p_in_str:
-                        continue
-                    if c == "(":
-                        if depth == 0:
-                            p_start = j
-                        depth += 1
-                    elif c == ")":
-                        depth -= 1
-                        if depth == 0 and p_start >= 0:
-                            parts2.append(rest[p_start:j + 1])
-                            p_start = -1
-                view_dir_files = _parse_skill_str_list(parts2[0]) if len(parts2) >= 1 else []
-                hist_dir_files = _parse_skill_str_list(parts2[1]) if len(parts2) >= 2 else []
-
-                # sdb files: strict canonical names only, no .cdslck/.old/.bak
-                sdb_files = [f for f in view_dir_files if _CANONICAL_SDB_RE.match(f)]
-
-                # Histories can be any user-given name (e.g. closeloop_PVT_postsim),
-                # with or without a system suffix (.RO, etc.).  We anchor on
-                # the <name>.rdb metadata file and also accept bare dir names
-                # that look like system-generated histories.
-                seen: set[str] = set()
-                for h in hist_dir_files:
-                    if _HISTORY_RDB_RE.match(h):
-                        seen.add(h[:-4])           # strip .rdb
-                    elif _HISTORY_DIR_RE.match(h):
-                        seen.add(h)
-
-                # Natural sort: numbers inside names sort numerically so
-                # Interactive.2 < Interactive.10.  Named histories
-                # (closeloop_PVT_postsim) sort alphabetically among peers.
-                def _natkey(s: str):
-                    return [
-                        (int(tok) if tok.isdigit() else 0, tok)
-                        for tok in re.findall(r"\d+|\D+", s)
-                    ]
-
-                history_list = sorted(seen, key=_natkey)
-
-    # Pick the sdb: prefer "{view}.sdb" (OA convention), else first strict match.
-    sdb_name = ""
-    if sdb_files:
-        preferred = f"{view}.sdb"
-        sdb_name = preferred if preferred in sdb_files else sdb_files[0]
+    lib_path, view_files, hist_files = _fetch_viewdir_listing(client, lib, cell, view)
+    sdb_name = _pick_sdb_file(view_files, view)
+    history_list = _natural_sort_histories(hist_files)
 
     sdb_path = (f"{lib_path}/{cell}/{view}/{sdb_name}"
                 if lib_path and cell and view and sdb_name else "")
-    results_base = (
-        f"{lib_path}/{cell}/{view}/results/maestro"
-        if lib_path and cell and view else ""
-    )
+    results_base = (f"{lib_path}/{cell}/{view}/results/maestro"
+                    if lib_path and cell and view else "")
 
-    # --- Resolve session from focused cellview -----------------------------
-    # No escape hatch: always map focused cellview → session via sdb
-    # test-name matching.  Skipped if only one session exists (trivial).
-    if len(all_sessions) == 0:
-        session = ""
-    elif len(all_sessions) == 1:
-        session = all_sessions[0]
-    elif sdb_path:
-        session = detect_session_for_focus(
-            client, sdb_path=sdb_path, sdb_cache_path=sdb_cache_path,
-        ) or ""
-    else:
-        session = ""
-
-    # --- Test name for the resolved session --------------------------------
+    session = _resolve_session(client, all_sessions, sdb_path, sdb_cache_path)
     test = _get_test(client, session) if session else ""
 
     return {
         "session": session,
-        "application": application,          # "assembler" / "explorer" / None
-        "lib": lib,
-        "cell": cell,
-        "view": view,
-        "editable": editable,                # True = "Editing:", False = "Reading:",
-                                             # None = could not parse title
-        "unsaved_changes": unsaved_changes,  # True if title ended with '*'
+        "application": title_match.get("application"),  # assembler / explorer / None
+        "lib": lib, "cell": cell, "view": view,
+        "editable": title_match.get("editable"),        # True / False / None
+        "unsaved_changes": title_match.get("unsaved_changes"),
         "lib_path": lib_path,
         "sdb_path": sdb_path,
         "results_base": results_base,
         "history_list": history_list,
         "test": test,
-        # Always populated so callers can diagnose "nothing matched"
-        # cases: report the actual focused window instead of silent exit.
+        # Always populated so callers can diagnose "nothing matched" —
+        # report the focused window instead of silent exit.
         "focused_window_title": cur_name or "",
         "all_window_titles": all_names,
     }

@@ -13,10 +13,10 @@ from virtuoso_bridge import VirtuosoClient
 
 from ._skill import _q, _get_test
 from ._parse_skill import (
-    _parse_pair_alist,
     _parse_sev_outputs,
     _parse_sexpr,
     _parse_skill_str_list,
+    _tokenize_top_level,
     parse_skill_alist,
 )
 from ._parse_sdb import (
@@ -158,8 +158,7 @@ def read_env(client: VirtuosoClient, session: str) -> dict:
 # Variables
 # ---------------------------------------------------------------------------
 
-def read_variables(client: VirtuosoClient, session: str, *,
-                   sdb_path: str | None = None,
+def read_variables(client: VirtuosoClient, sdb_path: str, *,
                    local_sdb_path: str | None = None,
                    reuse_local: bool = False) -> dict:
     """Read design variables with values, split by scope.
@@ -174,36 +173,13 @@ def read_variables(client: VirtuosoClient, session: str, *,
     sweeps — the parsed ``start``/``step``/``stop``/``points_count`` or
     ``values`` fields.
 
-    Prefers parsing ``maestro.sdb`` XML (works for ADE Assembler and
-    Explorer, no dependence on ``asiGetCurrentSession``'s shifting state).
-    Falls back to ``asiGetDesignVarList`` only when ``sdb_path`` is
-    unknown; that fallback yields ``globals`` only (the per-test split is
-    not reachable from SKILL).
+    ``sdb_path`` is required — the only reliable source for per-test
+    scope.  Callers should source it from
+    ``read_session_info(client)["sdb_path"]``.
     """
-    empty: dict = {"globals": {}, "per_test": {}}
-    if sdb_path:
-        parsed = parse_variables_from_sdb_xml(
-            _read_sdb_xml(client, sdb_path,
-                          local_path=local_sdb_path, reuse=reuse_local))
-        if parsed.get("globals") or parsed.get("per_test"):
-            return parsed
-
-    # Fallback: ask asi* (may return wrong session's vars when the ADE
-    # current session differs from the maestro session we want).
-    r = client.execute_skill('asiGetDesignVarList(asiGetCurrentSession())')
-    pairs = _parse_pair_alist(r.output or "")
-    if pairs:
-        return {"globals": {k: {"raw": v, "enabled": True, "kind": "scalar"}
-                            for k, v in pairs},
-                "per_test": {}}
-    r = client.execute_skill(
-        f'maeGetSetup(?session "{session}" ?typeName "variables")')
-    pairs = _parse_pair_alist(r.output or "")
-    if not pairs:
-        return empty
-    return {"globals": {k: {"raw": v, "enabled": True, "kind": "scalar"}
-                        for k, v in pairs},
-            "per_test": {}}
+    return parse_variables_from_sdb_xml(
+        _read_sdb_xml(client, sdb_path,
+                      local_path=local_sdb_path, reuse=reuse_local))
 
 
 # ---------------------------------------------------------------------------
@@ -301,43 +277,13 @@ def read_status(client: VirtuosoClient, session: str) -> dict:
     )
     raw = (r.output or "").strip()
 
-    def _split_top_level(body: str) -> list[str]:
-        parts: list[str] = []
-        depth = 0
-        start = 0
-        in_str = False
-        i = 0
-        n = len(body)
-        # Skip leading whitespace
-        while i < n and body[i].isspace():
-            i += 1
-        start = i
-        while i < n:
-            ch = body[i]
-            if ch == '"' and (i == 0 or body[i - 1] != "\\"):
-                in_str = not in_str
-            elif not in_str:
-                if ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                elif ch.isspace() and depth == 0:
-                    token = body[start:i].strip()
-                    if token:
-                        parts.append(token)
-                    # skip run of whitespace
-                    while i < n and body[i].isspace():
-                        i += 1
-                    start = i
-                    continue
-            i += 1
-        tail = body[start:].strip()
-        if tail:
-            parts.append(tail)
-        return parts
-
     body = raw[1:-1] if raw.startswith("(") and raw.endswith(")") else raw
-    parts = _split_top_level(body)
+    # 7 slots: run_mode, job_control, run_plan, current_history, error
+    # msgs, warning msgs, info msgs.  Each can be an atom (nil / string),
+    # a quoted string, or an errset-wrapped list.
+    parts = _tokenize_top_level(
+        body, include_strings=True, include_atoms=True,
+    )
     while len(parts) < 7:
         parts.append("nil")
 

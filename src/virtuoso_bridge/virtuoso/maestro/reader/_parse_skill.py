@@ -72,27 +72,79 @@ def _parse_pair_alist(raw: str) -> list[tuple[str, str]]:
     return re.findall(r'\("([^"]*)"\s+"([^"]*)"\)', raw)
 
 
-def _scan_top_groups(body: str) -> list[str]:
-    """Split at top-level parens: "(..) (..) (..)" → list of "(..)" strings."""
-    groups: list[str] = []
-    depth = 0
-    start = -1
-    in_str = False
-    for i, ch in enumerate(body):
-        if ch == '"' and (i == 0 or body[i - 1] != "\\"):
-            in_str = not in_str
-        if in_str:
+def _tokenize_top_level(body: str, *,
+                         include_groups: bool = True,
+                         include_strings: bool = False,
+                         include_atoms: bool = False,
+                         max_tokens: int | None = None) -> list[str]:
+    """Split ``body`` into top-level SKILL tokens, respecting quotes/parens.
+
+    A token is one of:
+      - a balanced ``(...)`` group (always — that's the basic reason
+        this helper exists)
+      - a double-quoted ``"..."`` string (yielded if ``include_strings``)
+      - a bare atom — a whitespace-delimited run containing no ``(``/``)`` —
+        (yielded if ``include_atoms``)
+
+    Quote and paren balancing is tracked across the whole scan; neither
+    escapes nor nested quotes fool us.  Stops early once ``max_tokens``
+    have been emitted.
+    """
+    tokens: list[str] = []
+    i, n = 0, len(body)
+    while i < n and (max_tokens is None or len(tokens) < max_tokens):
+        ch = body[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and not (body[j] == '"' and body[j - 1] != "\\"):
+                j += 1
+            tok = body[i:j + 1]
+            if include_strings:
+                tokens.append(tok)
+            i = j + 1
             continue
         if ch == "(":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0 and start >= 0:
-                groups.append(body[start:i + 1])
-                start = -1
-    return groups
+            depth = 1
+            j = i + 1
+            in_str = False
+            while j < n and depth:
+                c = body[j]
+                if in_str:
+                    if c == '"' and body[j - 1] != "\\":
+                        in_str = False
+                elif c == '"':
+                    in_str = True
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                j += 1
+            tok = body[i:j]
+            if include_groups:
+                tokens.append(tok)
+            i = j
+            continue
+        # Bare atom: run until whitespace or paren.
+        j = i
+        while j < n and not body[j].isspace() and body[j] not in "()":
+            j += 1
+        if include_atoms:
+            tokens.append(body[i:j])
+        i = j
+    return tokens
+
+
+def _scan_top_groups(body: str) -> list[str]:
+    """Split at top-level parens: ``(..) (..) (..)`` → list of ``(..)`` strings.
+
+    Atoms and strings between groups are ignored — this is the common-case
+    wrapper around :func:`_tokenize_top_level` for "give me the lists".
+    """
+    return _tokenize_top_level(body, include_groups=True,
+                                include_strings=False, include_atoms=False)
 
 
 def _parse_sexpr(tok: str):

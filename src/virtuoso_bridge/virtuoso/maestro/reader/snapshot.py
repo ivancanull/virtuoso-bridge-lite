@@ -5,6 +5,12 @@ Everything else in the ``reader`` package is a primitive used here.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
+import uuid
+from pathlib import Path
+
 from virtuoso_bridge import VirtuosoClient
 
 from ._compact import (
@@ -31,6 +37,29 @@ from .probes import (
 from .remote_io import read_remote_file
 from .runs import find_history_paths, read_latest_history, read_results
 from .session import detect_scratch_root_via_skill, read_session_info
+
+
+@contextlib.contextmanager
+def _sdb_cache(given: str | None):
+    """Yield a path for sub-readers to share as ``local_sdb_path``.
+
+    If the caller provided one, yield it unchanged (caller owns cleanup).
+    Otherwise generate a unique, not-yet-existing path under the system
+    tempdir; clean it up on exit.  The file is not pre-created: the first
+    sub-reader's scp writes it, subsequent ones pick it up via
+    ``reuse_if_exists=True``.
+    """
+    if given is not None:
+        yield given
+        return
+    path = Path(tempfile.gettempdir()) / f"vb_sdb_{uuid.uuid4().hex}.xml"
+    try:
+        yield str(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def _detect_scratch_root(client, info: dict, local_sdb_path: str) -> str | None:
@@ -312,24 +341,8 @@ def snapshot(client: VirtuosoClient, *,
       single temp file is created and shared across all sub-readers so
       ``maestro.sdb`` is fetched exactly once per snapshot.
     """
-    import os
-    import tempfile
-
-    owned_cache_path: str | None = None
-    if sdb_cache_path is None:
-        tf = tempfile.NamedTemporaryFile(delete=False, suffix=".sdb.xml")
-        tf.close()
-        owned_cache_path = tf.name
-        # Remove the empty placeholder so reuse_if_exists only kicks in
-        # after the first real download writes the file.
-        try:
-            os.unlink(owned_cache_path)
-        except OSError:
-            pass
-        sdb_cache_path = owned_cache_path
-
-    try:
-        info = read_session_info(client, sdb_cache_path=sdb_cache_path)
+    with _sdb_cache(sdb_cache_path) as cache_path:
+        info = read_session_info(client, sdb_cache_path=cache_path)
         sess = info.get("session") or ""
 
         cfg_raw = read_config_raw(client, sess) if sess else {}
@@ -337,28 +350,22 @@ def snapshot(client: VirtuosoClient, *,
         cfg = _parse_config(cfg_raw)
         env = _parse_env(env_raw)
 
+        sdb = info.get("sdb_path") or ""
         variables = read_variables(
-            client, sess,
-            sdb_path=info.get("sdb_path") or None,
-            local_sdb_path=sdb_cache_path,
-            reuse_local=True,
-        ) if sess else {}
+            client, sdb, local_sdb_path=cache_path, reuse_local=True,
+        ) if sdb else {"globals": {}, "per_test": {}}
 
         outputs = read_outputs(client, sess) if sess else []
 
         corners = read_corners(
-            client, info.get("sdb_path") or "",
-            local_sdb_path=sdb_cache_path,
-            reuse_local=True,
-        ) if info.get("sdb_path") else {}
+            client, sdb, local_sdb_path=cache_path, reuse_local=True,
+        ) if sdb else {}
 
         parameters: list[dict] = []
-        if info.get("sdb_path"):
-            xml_text = read_remote_file(
-                client, info["sdb_path"],
-                local_path=sdb_cache_path, reuse_if_exists=True,
-            )
-            parameters = parse_parameters_from_sdb_xml(xml_text)
+        if sdb:
+            parameters = parse_parameters_from_sdb_xml(
+                read_remote_file(client, sdb,
+                                 local_path=cache_path, reuse_if_exists=True))
 
         status = read_status(client, sess) if sess else {}
         corners_enabled, corners_detail = _compact_corners(corners)
@@ -400,7 +407,7 @@ def snapshot(client: VirtuosoClient, *,
             # --- Paths (absolute, on the remote) -----------------------
             "paths": {
                 "lib":          info.get("lib_path") or "",
-                "sdb":          info.get("sdb_path") or "",
+                "sdb":          sdb,
                 "results_base": info.get("results_base") or "",
             },
         }
@@ -420,9 +427,3 @@ def snapshot(client: VirtuosoClient, *,
                 client, info, scratch_root=scratch_root,
             )
         return out
-    finally:
-        if owned_cache_path:
-            try:
-                os.unlink(owned_cache_path)
-            except OSError:
-                pass

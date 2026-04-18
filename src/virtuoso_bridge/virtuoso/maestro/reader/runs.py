@@ -13,6 +13,7 @@ import re
 
 from virtuoso_bridge import VirtuosoClient
 
+from ._parse_skill import _parse_sexpr, _parse_skill_str_list
 from ._skill import _q, _get_test, _unique_remote_wave_path
 from .remote_io import read_remote_file
 
@@ -174,12 +175,28 @@ let((out)
 # ---------------------------------------------------------------------------
 
 def read_results(client: VirtuosoClient, session: str,
-                  lib: str = "", cell: str = "", history: str = "") -> dict[str, tuple[str, str]]:
+                  lib: str = "", cell: str = "",
+                  history: str = "",
+                  *,
+                  include_raw: bool = False) -> dict:
     """Read simulation results: output values, spec status, yield.
 
     Requires GUI mode (deOpenCellView + maeMakeEditable).
     Finds the latest valid history automatically by scanning Interactive.N.
-    Returns empty dict if no results.
+    Returns ``{}`` if no results are available.
+
+    Returns::
+
+        {
+          "history":       "Interactive.7",
+          "tests":         [test_name, ...],
+          "outputs":       [{"test", "name", "value", "spec_status"}, ...],
+          "overall_spec":  "passed" | "failed" | None,
+          "overall_yield": "100" | None,
+        }
+
+    With ``include_raw=True`` the raw SKILL output strings (pre-parse)
+    are attached under ``"raw"`` for debug / audit.
 
     Args:
         session: active session string
@@ -187,6 +204,7 @@ def read_results(client: VirtuosoClient, session: str,
         cell: cell name (auto-detected if empty)
         history: explicit history name (preferred, e.g. "Interactive.7").
             If empty, falls back to scanning latest valid Interactive.N.
+        include_raw: attach raw SKILL output strings under ``"raw"``.
     """
     def q(label, expr):
         return _q(client, label, expr)
@@ -254,14 +272,10 @@ let((libPath base files nums found)
     if not opened or opened.strip('"') in ("nil", ""):
         return {}
 
-    result: dict[str, tuple[str, str]] = {}
-
-    expr = 'maeGetResultTests()'
-    result["maeGetResultTests"] = q("maeGetResultTests", expr)
-
-    # Iterate outputs in SKILL to avoid Python regex issues with nested quotes.
-    # Returns: ((outputName value specStatus) ...) for each test.
-    values_expr = '''
+    # Raw SKILL captures — kept in a side-channel for debug / include_raw.
+    raw_tests  = q("maeGetResultTests",   'maeGetResultTests()')
+    # Returns: ((test outputName value specStatus) ...) — flat entries.
+    raw_values = q("maeGetOutputValues", '''
 let((tests info)
   info = list()
   tests = maeGetResultTests()
@@ -279,18 +293,59 @@ let((tests info)
   )
   info
 )
-'''
-    result["maeGetOutputValues"] = q("maeGetOutputValues", values_expr)
-
-    expr = 'maeGetOverallSpecStatus()'
-    result["maeGetOverallSpecStatus"] = q("maeGetOverallSpecStatus", expr)
-
-    expr = f'maeGetOverallYield("{latest_history}")'
-    result["maeGetOverallYield"] = q("maeGetOverallYield", expr)
-
+''')
+    raw_overall = q("maeGetOverallSpecStatus", 'maeGetOverallSpecStatus()')
+    raw_yield   = q("maeGetOverallYield",
+                    f'maeGetOverallYield("{latest_history}")')
     client.execute_skill('maeCloseResults()')
 
-    return result
+    structured = _parse_results(
+        raw_tests=raw_tests, raw_values=raw_values,
+        raw_overall=raw_overall, raw_yield=raw_yield,
+        history=latest_history,
+    )
+    if include_raw:
+        structured["raw"] = {
+            "maeGetResultTests":        raw_tests,
+            "maeGetOutputValues":       raw_values,
+            "maeGetOverallSpecStatus":  raw_overall,
+            "maeGetOverallYield":       raw_yield,
+        }
+    return structured
+
+
+def _parse_results(*, raw_tests: str, raw_values: str,
+                    raw_overall: str, raw_yield: str,
+                    history: str) -> dict:
+    """Pure: decode the four SKILL result strings into a structured dict."""
+    tests = _parse_skill_str_list(raw_tests)
+
+    outputs: list[dict] = []
+    parsed = _parse_sexpr(raw_values.strip())
+    if isinstance(parsed, list):
+        for entry in parsed:
+            if isinstance(entry, list) and len(entry) >= 4:
+                test_n, name, value, spec = entry[:4]
+                outputs.append({
+                    "test":        test_n if isinstance(test_n, str) else "",
+                    "name":        name if isinstance(name, str) else "",
+                    "value":       "" if value is None else str(value),
+                    "spec_status": "" if spec is None else str(spec),
+                })
+
+    def _unquote_atom(raw: str) -> str | None:
+        s = (raw or "").strip().strip('"')
+        if not s or s.lower() == "nil":
+            return None
+        return s
+
+    return {
+        "history":       history,
+        "tests":         tests,
+        "outputs":       outputs,
+        "overall_spec":  _unquote_atom(raw_overall),
+        "overall_yield": _unquote_atom(raw_yield),
+    }
 
 
 def export_waveform(
