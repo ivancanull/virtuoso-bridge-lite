@@ -537,26 +537,38 @@ def read_outputs(client: VirtuosoClient, session: str,
 
 
 _MAE_TITLE_RE = re.compile(
-    r"Assembler\s+(?:Editing|Reading):\s+(\S+)\s+(\S+)\s+(\S+)\s*$"
+    r"Assembler\s+(Editing|Reading):\s+(\S+)\s+(\S+)\s+([^\s*]+)(\*?)\s*$"
 )
 _INTERACTIVE_RE = re.compile(r"^(Interactive|MonteCarlo)\.[0-9]+(?:\.rdb)?$")
 _CANONICAL_SDB_RE = re.compile(r"^[^.]+\.sdb$")   # e.g. maestro.sdb, maestro_MC.sdb
 
 
-def _match_mae_title(titles):
-    """Return (lib, cell, view) from the first maestro-like title, or empty.
+def _match_mae_title(titles) -> dict:
+    """Parse the first maestro-like title into structured fields.
 
-    The view may end with ``*`` in the title (Virtuoso's "unsaved changes"
-    indicator) — strip it.
+    Title format::
+
+        Virtuoso® ADE Assembler {Editing|Reading}: LIB CELL VIEW[*]
+
+    ``*`` at the end is Virtuoso's "unsaved changes" indicator.
+
+    Returns a dict with keys lib, cell, view, editable, unsaved_changes —
+    empty dict if no title matches.
     """
     for n in titles or ():
         if not n:
             continue
         m = _MAE_TITLE_RE.search(n)
         if m:
-            view = m.group(3).rstrip("*")
-            return m.group(1), m.group(2), view
-    return "", "", ""
+            mode, lib, cell, view, star = m.groups()
+            return {
+                "lib": lib,
+                "cell": cell,
+                "view": view,
+                "editable": mode == "Editing",
+                "unsaved_changes": star == "*",
+            }
+    return {}
 
 
 def read_session_info(client: VirtuosoClient, session: str) -> dict:
@@ -654,9 +666,12 @@ def read_session_info(client: VirtuosoClient, session: str) -> dict:
 
     # --- Identify which maestro window the user is on -----------------------
     # Prefer the focused window; fall back to scanning all windows.
-    lib, cell, view = _match_mae_title([cur_name])
-    if not lib:
-        lib, cell, view = _match_mae_title(all_names)
+    match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
+    lib = match.get("lib", "")
+    cell = match.get("cell", "")
+    view = match.get("view", "")
+    editable = match.get("editable")           # None if no match
+    unsaved_changes = match.get("unsaved_changes")
 
     # --- Round 2: lib_path + view-dir listing + history listing ------------
     lib_path = ""
@@ -737,6 +752,9 @@ def read_session_info(client: VirtuosoClient, session: str) -> dict:
         "lib": lib,
         "cell": cell,
         "view": view,
+        "editable": editable,                # True = "Editing:", False = "Reading:",
+                                             # None = could not parse title
+        "unsaved_changes": unsaved_changes,  # True if title ended with '*'
         "lib_path": lib_path,
         "sdb_path": sdb_path,
         "results_base": results_base,
