@@ -26,17 +26,16 @@ def _unique_remote_wave_path(history: str) -> str:
     return f"/tmp/vb_wave_{_history_token(history)}_{ts_ms}_{nonce}.txt"
 
 
-def _q(client: VirtuosoClient, label: str, expr: str) -> tuple[str, str]:
-    """Execute SKILL, print to CIW, return (expr, raw output)."""
+def _q(client: VirtuosoClient, label: str, expr: str) -> str:
+    """Execute SKILL, print a CIW breadcrumb, return raw output string."""
     wrapped = (
         f'let((rbResult) '
         f'rbResult = {expr} '
         f'printf("[%s read] {label}\\n" nth(2 parseString(getCurrentTime()))) '
-        f'printf("  %L\\n" rbResult) '
         f'rbResult)'
     )
     r = client.execute_skill(wrapped)
-    return (expr, r.output or "")
+    return r.output or ""
 
 
 def _get_test(client: VirtuosoClient, session: str) -> str:
@@ -50,89 +49,157 @@ def _get_test(client: VirtuosoClient, session: str) -> str:
     return ""
 
 
-def read_config(client: VirtuosoClient, session: str) -> dict[str, tuple[str, str]]:
-    """Read test configuration: tests, analyses, outputs, variables, parameters, corners.
+def read_setup_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
+    """One combined raw fetch: test list + analyses + env + sim options.
 
-    Returns dict of (skill_expr, raw_output) tuples.
+    Returns a flat ``{label: raw_skill_output}`` dict covering:
+
+      - ``maeGetSetup``              — test list
+      - ``maeGetEnabledAnalysis``    — enabled analysis names
+      - ``maeGetAnalysis:<name>``    — per-analysis option alist
+      - ``maeGetEnvOption``          — env options alist
+      - ``maeGetSimOption``          — sim options alist
+
+    Equivalent to the merger of ``read_config_raw`` + ``read_env_raw``
+    but exposed as a single function (no reason to split — they're all
+    about the same test).
     """
-    def q(label, expr):
-        return _q(client, label, expr)
+    if not session:
+        return {}
+    return {
+        **read_config_raw(client, session),
+        **read_env_raw(client, session),
+    }
 
-    expr = f'maeGetSetup(?session "{session}")'
-    _, tests_raw = q("maeGetSetup", expr)
-    test = ""
-    if tests_raw and tests_raw != "nil":
-        m = re.findall(r'"([^"]+)"', tests_raw)
-        if m:
-            test = m[0]
 
-    result: dict[str, tuple[str, str]] = {"maeGetSetup": (expr, tests_raw)}
-    if not test:
-        return result
+def _parse_setup(raw: dict[str, str]) -> dict:
+    """Pure: turn read_setup_raw output into one structured dict."""
+    return {**_parse_config(raw), **_parse_env(raw)}
 
-    # Enabled analyses
-    expr = f'maeGetEnabledAnalysis("{test}" ?session "{session}")'
-    _, enabled_raw = q("maeGetEnabledAnalysis", expr)
-    result["maeGetEnabledAnalysis"] = (expr, enabled_raw)
-    enabled = re.findall(r'"([^"]+)"', enabled_raw)
 
-    # Per-analysis params
+def read_setup(client: VirtuosoClient, session: str) -> dict:
+    """Read test setup as one structured Python dict.
+
+    Returns::
+
+        {"tests": list[str],
+         "enabled_analyses": list[str],
+         "analyses": {ana_name: {param: value, ...}},
+         "env_options": {...},
+         "sim_options": {...}}
+
+    For the raw SKILL strings, use ``read_setup_raw``.
+    """
+    return _parse_setup(read_setup_raw(client, session))
+
+
+def read_config_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
+    """Fetch SKILL probes for test configuration — raw output strings only.
+
+    Returns a flat ``{label: raw_output_string}`` dict.  Labels match the
+    SKILL function / qualifier, so ``"maeGetAnalysis:ac"`` holds the raw
+    alist for the ``ac`` analysis's options.
+
+    The redundant probes (outputs/corners/variables) are NOT done here —
+    those are owned by ``read_outputs`` / ``read_corners`` /
+    ``read_variables`` and not duplicated.
+    """
+    raws: dict[str, str] = {}
+    tests_raw = _q(client, "maeGetSetup",
+                   f'maeGetSetup(?session "{session}")')
+    raws["maeGetSetup"] = tests_raw
+    tests = re.findall(r'"([^"]+)"', tests_raw)
+    if not tests:
+        return raws
+    test = tests[0]
+
+    enabled_raw = _q(client, "maeGetEnabledAnalysis",
+                     f'maeGetEnabledAnalysis("{test}" ?session "{session}")')
+    raws["maeGetEnabledAnalysis"] = enabled_raw
+
+    for ana in re.findall(r'"([^"]+)"', enabled_raw):
+        raws[f"maeGetAnalysis:{ana}"] = _q(
+            client, f"maeGetAnalysis:{ana}",
+            f'maeGetAnalysis("{test}" "{ana}" ?session "{session}")',
+        )
+    return raws
+
+
+def _parse_config(raw: dict[str, str]) -> dict:
+    """Pure: turn read_config_raw output into structured fields."""
+    tests = _parse_sexpr(raw.get("maeGetSetup", "")) or []
+    if not isinstance(tests, list):
+        tests = [tests] if tests else []
+
+    enabled = _parse_sexpr(raw.get("maeGetEnabledAnalysis", "")) or []
+    if not isinstance(enabled, list):
+        enabled = [enabled] if enabled else []
+
+    analyses: dict[str, dict] = {}
     for ana in enabled:
-        expr = f'maeGetAnalysis("{test}" "{ana}" ?session "{session}")'
-        result[f"maeGetAnalysis:{ana}"] = q(f"maeGetAnalysis:{ana}", expr)
+        analyses[ana] = parse_skill_alist(raw.get(f"maeGetAnalysis:{ana}", ""))
 
-    # Outputs
-    expr_out = (
-        f'let((outs result) '
-        f'outs = maeGetTestOutputs("{test}" ?session "{session}") '
-        f'result = list() '
-        f'foreach(o outs '
-        f'  result = append1(result list(o~>name o~>type o~>signal o~>expression))) '
-        f'result)'
-    )
-    result["maeGetTestOutputs"] = q("maeGetTestOutputs", expr_out)
-
-    # Variables, parameters, corners
-    for type_name in ("variables", "parameters", "corners"):
-        expr = f'maeGetSetup(?session "{session}" ?typeName "{type_name}")'
-        result[type_name] = q(type_name, expr)
-
-    return result
+    return {
+        "tests": tests,
+        "enabled_analyses": enabled,
+        "analyses": analyses,
+    }
 
 
-def read_env(client: VirtuosoClient, session: str) -> dict[str, tuple[str, str]]:
-    """Read system settings: env options, sim options, run mode, job control.
+def read_config(client: VirtuosoClient, session: str) -> dict:
+    """Read test configuration as structured Python data.
 
-    Returns dict of (skill_expr, raw_output) tuples.
+    Returns::
+
+        {"tests": list[str],
+         "enabled_analyses": list[str],
+         "analyses": {ana_name: {param: value, ...}}}
+
+    For the raw SKILL output strings (debug / offline re-parse), use
+    ``read_config_raw``.
     """
-    def q(label, expr):
-        return _q(client, label, expr)
+    return _parse_config(read_config_raw(client, session))
 
+
+def read_env_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
+    """Fetch SKILL probes for env + sim options — raw output strings only.
+
+    Run mode, job control, and simulation messages are part of the
+    session's *runtime* state and belong in ``read_status``, not here.
+    """
     test = _get_test(client, session)
     if not test:
         return {}
+    return {
+        "maeGetEnvOption": _q(
+            client, "maeGetEnvOption",
+            f'maeGetEnvOption("{test}" ?session "{session}")',
+        ),
+        "maeGetSimOption": _q(
+            client, "maeGetSimOption",
+            f'maeGetSimOption("{test}" ?session "{session}")',
+        ),
+    }
 
-    result: dict[str, tuple[str, str]] = {}
 
-    expr = f'maeGetEnvOption("{test}" ?session "{session}")'
-    result["maeGetEnvOption"] = q("maeGetEnvOption", expr)
+def _parse_env(raw: dict[str, str]) -> dict:
+    """Pure: turn read_env_raw output into structured fields."""
+    return {
+        "env_options": parse_skill_alist(raw.get("maeGetEnvOption", "")),
+        "sim_options": parse_skill_alist(raw.get("maeGetSimOption", "")),
+    }
 
-    expr = f'maeGetSimOption("{test}" ?session "{session}")'
-    result["maeGetSimOption"] = q("maeGetSimOption", expr)
 
-    expr = f'maeGetCurrentRunMode(?session "{session}")'
-    result["maeGetCurrentRunMode"] = q("maeGetCurrentRunMode", expr)
+def read_env(client: VirtuosoClient, session: str) -> dict:
+    """Read env + sim options as structured Python data.
 
-    expr = f'maeGetJobControlMode(?session "{session}")'
-    result["maeGetJobControlMode"] = q("maeGetJobControlMode", expr)
+    Returns::
 
-    # Simulation messages
-    expr = f'maeGetSimulationMessages(?session "{session}")'
-    _, sim_msgs = q("maeGetSimulationMessages", expr)
-    if sim_msgs and sim_msgs not in ("nil", '""'):
-        result["maeGetSimulationMessages"] = (expr, sim_msgs)
+        {"env_options": {...},  "sim_options": {...}}
 
-    return result
+    For the raw SKILL output strings, use ``read_env_raw``.
+    """
+    return _parse_env(read_env_raw(client, session))
 
 
 def read_results(client: VirtuosoClient, session: str,
@@ -421,6 +488,104 @@ def read_variables(client: VirtuosoClient, session: str, *,
 
 _OUTPUT_FIELDS = ("name", "type", "signal", "expr",
                   "plot", "save", "eval_type", "unit", "spec")
+
+
+def _scan_top_groups(body: str) -> list[str]:
+    """Split at top-level parens: "(..) (..) (..)" → list of "(..)" strings."""
+    groups: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    for i, ch in enumerate(body):
+        if ch == '"' and (i == 0 or body[i - 1] != "\\"):
+            in_str = not in_str
+        if in_str:
+            continue
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                groups.append(body[start:i + 1])
+                start = -1
+    return groups
+
+
+def _parse_sexpr(tok: str):
+    """Parse one SKILL atom or list into Python.
+
+    ``"x"`` → ``"x"`` (unescaped), ``nil`` → ``None``, ``t`` → ``True``,
+    ``(a b c)`` → list[...], bare number/symbol → original string.
+    """
+    tok = (tok or "").strip()
+    if not tok:
+        return None
+    if tok == "nil":
+        return None
+    if tok == "t":
+        return True
+    if tok.startswith('"') and tok.endswith('"') and len(tok) >= 2:
+        return tok[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if tok.startswith("(") and tok.endswith(")"):
+        inner = tok[1:-1]
+        items: list = []
+        i = 0
+        n = len(inner)
+        while i < n:
+            while i < n and inner[i].isspace():
+                i += 1
+            if i >= n:
+                break
+            if inner[i] == '"':
+                j = i + 1
+                while j < n and not (inner[j] == '"' and inner[j - 1] != "\\"):
+                    j += 1
+                items.append(_parse_sexpr(inner[i:j + 1]))
+                i = j + 1
+            elif inner[i] == "(":
+                depth = 1
+                j = i + 1
+                while j < n and depth:
+                    if inner[j] == "(":
+                        depth += 1
+                    elif inner[j] == ")":
+                        depth -= 1
+                    j += 1
+                items.append(_parse_sexpr(inner[i:j]))
+                i = j
+            else:
+                j = i
+                while j < n and not inner[j].isspace() and inner[j] not in "()":
+                    j += 1
+                items.append(_parse_sexpr(inner[i:j]))
+                i = j
+        return items
+    return tok
+
+
+def parse_skill_alist(raw: str) -> dict:
+    """Parse a SKILL association list ``(("k" v) ("k" v) ...)`` into a dict.
+
+    Values can be strings, ``nil`` (→ ``None``), ``t`` (→ ``True``), or
+    nested lists (→ Python lists).  Returns ``{}`` on empty / ``nil`` / parse
+    failure.  Keys that aren't quoted strings are skipped.
+    """
+    raw = (raw or "").strip().strip('"')
+    if not raw or raw == "nil":
+        return {}
+    if raw.startswith("(") and raw.endswith(")"):
+        raw = raw[1:-1]
+    result: dict = {}
+    for g in _scan_top_groups(raw):
+        items = _parse_sexpr(g)
+        if isinstance(items, list) and len(items) >= 2:
+            key = items[0]
+            if isinstance(key, str):
+                # Value: single item if pair, list if 3+.
+                result[key] = items[1] if len(items) == 2 else items[1:]
+    return result
 
 
 def _parse_sev_outputs(raw: str) -> list[dict]:
@@ -824,7 +989,104 @@ def read_session_info(client: VirtuosoClient, *,
         "results_base": results_base,
         "history_list": history_list,
         "test": test,
+        # Always populated so callers can diagnose "nothing matched"
+        # cases: report the actual focused window instead of silent exit.
+        "focused_window_title": cur_name or "",
+        "all_window_titles": all_names,
     }
+
+
+def detect_scratch_root_from_sdb(xml_text: str, lib: str, cell: str,
+                                  view: str, *,
+                                  lib_path: str | None = None) -> str | None:
+    """Auto-detect the simulation scratch prefix from ``maestro.sdb``.
+
+    The sdb records two kinds of absolute paths that both look like
+    ``{prefix}/LIB/CELL/VIEW/results/maestro/...``:
+
+      - **metadata** location = ``{lib_path_parent}/LIB/...``
+        (where Interactive.N.log / .rdb / .msg.db live)
+      - **scratch** location = ``{scratch_root}/LIB/...``
+        (where the actual run data — netlist/psf — lives)
+
+    Pass ``lib_path`` so we can filter out the metadata prefix and
+    return only the scratch one.  Returns ``None`` if no scratch
+    reference is present (session never simulated / setup fresh).
+    """
+    if not (xml_text and lib and cell and view):
+        return None
+    pattern = re.compile(
+        rf'([^\s"<>]+?)/{re.escape(lib)}/{re.escape(cell)}/{re.escape(view)}/'
+        r'results/maestro/'
+    )
+    matches = pattern.findall(xml_text)
+    if not matches:
+        return None
+
+    # Filter out the metadata prefix (== lib_path without the trailing /LIB).
+    metadata_prefix = None
+    if lib_path and lib_path.rstrip("/").endswith(f"/{lib}"):
+        metadata_prefix = lib_path.rstrip("/")[: -len(f"/{lib}")]
+    matches = [m for m in matches if m != metadata_prefix]
+    if not matches:
+        return None
+
+    from collections import Counter
+    most_common, _ = Counter(matches).most_common(1)[0]
+    return most_common
+
+
+def parse_parameters_from_sdb_xml(xml_text: str) -> list[dict]:
+    """Extract global parameter overrides from ``maestro.sdb``.
+
+    Parameters are per-instance overrides attached to schematic locations
+    (as opposed to design ``vars`` which are global-scope).  Structure::
+
+        <active><parameters>
+          <location>LIB/CELL/VIEW/INSTANCE
+            <parameter enabled="1">NAME
+              <value>VAL</value>
+            </parameter>
+            ...
+          </location>
+          ...
+
+    Returns a list of dicts::
+
+        [{"location": "LIB/CELL/VIEW/INSTANCE",
+          "name": "fingers",
+          "value": "4",
+          "enabled": True}, ...]
+
+    ``value`` may contain Cadence expressions like
+    ``M4/fingers@LIB/CELL/VIEW`` for instance-tracking references.
+    Returns ``[]`` on empty / parse error.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+
+    result: list[dict] = []
+    for active in root.findall("active"):
+        params_elem = active.find("parameters")
+        if params_elem is None:
+            continue
+        for loc in params_elem.findall("location"):
+            loc_name = (loc.text or "").strip()
+            for p in loc.findall("parameter"):
+                name = (p.text or "").strip()
+                if not name:
+                    continue
+                result.append({
+                    "location": loc_name,
+                    "name": name,
+                    "value": p.findtext("value", "").strip(),
+                    "enabled": p.get("enabled", "0") == "1",
+                })
+    return result
 
 
 def parse_variables_from_sdb_xml(xml_text: str) -> dict[str, str]:
@@ -1142,41 +1404,782 @@ def read_status(client: VirtuosoClient, session: str) -> dict:
     }
 
 
+def _run_artifact_paths(base: str) -> dict:
+    """Compute the canonical netlist/psf/marker file paths for one run.
+
+    Pure function: no I/O.  Paths are not verified; callers probe as needed.
+    """
+    nl = f"{base}/netlist"
+    psf = f"{base}/psf"
+    return {
+        "base": base,
+        "netlist": {
+            "input_scs":        f"{nl}/input.scs",
+            "netlist":          f"{nl}/netlist",
+            "spectre_inp":      f"{nl}/spectre.inp",
+            "design_variables": f"{nl}/.designVariables",
+            "model_files":      f"{nl}/.modelFiles",
+            "included_models":  f"{nl}/.includedModels",
+            "compile_log":      f"{nl}/si.foregnd.log",
+            "artist_env_log":   f"{nl}/artSimEnvLog",
+        },
+        "psf": {
+            "spectre_out":      f"{psf}/spectre.out",
+            "log_file":         f"{psf}/logFile",
+            "artist_log":       f"{psf}/artistLogFile",
+            "element_info":     f"{psf}/element.info",
+            "model_parameter":  f"{psf}/modelParameter.info",
+            "final_op":         f"{psf}/finalTimeOP.info",
+            "design_param_vals": f"{psf}/designParamVals.info",
+            "primitives_info":  f"{psf}/primitives.info.primitives",
+            "subckts_info":     f"{psf}/subckts.info.subckts",
+            "waveforms_dir":    psf,    # tran.tran.tran / ac.ac.ac / pss.* live here
+        },
+        "markers": {
+            "sim_done":   f"{psf}/.simDone",
+            "eval_done":  f"{psf}/.evalDone",
+            "netlist_complete": f"{nl}/.netlistComplete",
+        },
+    }
+
+
+def find_history_paths(client: VirtuosoClient, info: dict, *,
+                       histories: list[str] | None = None,
+                       scratch_root: str) -> list[dict]:
+    """Enumerate netlist + psf + marker paths for each history × run point.
+
+    Scratch tree shape::
+
+        {scratch_root}/{lib}/{cell}/{view}/results/maestro/
+            {history}/                    # Interactive.N / MonteCarlo.N / named
+                {run_id}/                 # 1 for single run; 2, 3... for sweeps
+                    {hist_tag}/           # Cadence-chosen; often the test name
+                        netlist/input.scs
+                        psf/spectre.out
+
+    Args:
+        info: the dict returned by ``read_session_info``.
+        histories: which histories to enumerate.  Defaults to
+            ``info["history_list"]`` — i.e. everything.
+        scratch_root: install-specific scratch prefix
+            (e.g. ``/server_local_ssd/USER/simulation``).  Can differ per
+            library owner; the bridge has no way to auto-detect this so
+            callers must supply it (usually from ``local/context.yml``).
+
+    Returns one dict per history::
+
+        [{"name": "Interactive.8",
+          "runs": [{"run_id": "1", "hist_tag": "TB_OTA",
+                    "base": "/scratch/.../Interactive.8/1/TB_OTA",
+                    "netlist": {...},  "psf": {...},  "markers": {...}},
+                   ...]},
+         ...]
+
+    Returns ``[]`` on missing lib/cell/view/scratch_root.  Histories with
+    no runs on disk (scratch not present / sim hasn't started) still
+    appear with an empty ``runs`` list.
+    """
+    lib = info.get("lib") or ""
+    cell = info.get("cell") or ""
+    view = info.get("view") or ""
+    if not (scratch_root and lib and cell and view):
+        return []
+
+    if histories is None:
+        histories = info.get("history_list") or []
+    if not histories:
+        return []
+
+    root_for_lib = f"{scratch_root}/{lib}/{cell}/{view}/results/maestro"
+
+    # ONE SKILL call: for every history, list its run_id dirs and hist_tag
+    # subdirs.  Returns triples (history run_id hist_tag).
+    hist_list_sexpr = "list(" + " ".join(f'"{h}"' for h in histories) + ")"
+    r = client.execute_skill(f'''
+let((root result)
+  root = "{root_for_lib}"
+  result = list()
+  foreach(h {hist_list_sexpr}
+    let((hp)
+      hp = strcat(root "/" h)
+      when(isDir(hp)
+        foreach(rn getDirFiles(hp)
+          when(rexMatchp("^[0-9]+$" rn)
+            let((rp)
+              rp = strcat(hp "/" rn)
+              when(isDir(rp)
+                foreach(tg getDirFiles(rp)
+                  when(and(nequal(tg ".") nequal(tg "..")
+                           isDir(strcat(rp "/" tg)))
+                    result = cons(list(h rn tg) result))))))))))
+  result)
+''')
+
+    triples = re.findall(
+        r'\("([^"]+)"\s+"([^"]+)"\s+"([^"]+)"\)', r.output or ""
+    )
+
+    # Group by history, preserving input order
+    buckets: dict[str, list[tuple[str, str]]] = {h: [] for h in histories}
+    for hist, run_id, tag in triples:
+        buckets.setdefault(hist, []).append((run_id, tag))
+
+    result: list[dict] = []
+    for hist in histories:
+        runs = []
+        for run_id, tag in sorted(
+            buckets.get(hist, []),
+            key=lambda rt: (int(rt[0]) if rt[0].isdigit() else -1, rt[1]),
+        ):
+            base = f"{root_for_lib}/{hist}/{run_id}/{tag}"
+            runs.append({
+                "run_id": run_id,
+                "hist_tag": tag,
+                **_run_artifact_paths(base),
+            })
+        result.append({"name": hist, "runs": runs})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Snapshot reshape helpers — keep only high-signal fields.
+# ---------------------------------------------------------------------------
+
+# Sim options worth reporting; everything else is Cadence defaults / noise.
+_SIM_OPTIONS_KEEP = {
+    "temp", "tnom", "reltol", "vabstol", "iabstol", "gmin",
+    "method", "errpreset", "scalem", "scale", "maxiters",
+}
+
+
+def _compact_sim_options(opts: dict) -> dict:
+    return {k: opts[k] for k in _SIM_OPTIONS_KEEP
+            if k in opts and opts[k] not in (None, "", [], {})}
+
+
+def _extract_models(env_opts: dict) -> list[dict]:
+    """Promote modelFiles (list of [file, section] pairs) to dicts."""
+    mf = env_opts.get("modelFiles") or []
+    result = []
+    for entry in mf:
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            result.append({"file": entry[0], "section": entry[1]})
+    return result
+
+
+def _compact_outputs(outs: list) -> list:
+    """Drop null / empty fields from each output dict."""
+    result = []
+    for o in outs:
+        cleaned = {"kind": o.get("category") or "unknown"}
+        for k in ("name", "expr", "signal", "type", "plot", "save",
+                  "unit", "spec", "eval_type"):
+            v = o.get(k)
+            if v is not None and v != "" and v != []:
+                cleaned[k] = v
+        result.append(cleaned)
+    return result
+
+
+def _compact_corners(corners: dict) -> tuple[list, dict]:
+    """Split corners into (enabled_names, enabled_with_detail)."""
+    enabled = [k for k, v in corners.items() if v.get("enabled")]
+    detail: dict = {}
+    for name, c in corners.items():
+        if not c.get("enabled"):
+            continue
+        clean = {}
+        if c.get("temperature"):
+            clean["temperature"] = c["temperature"]
+        if c.get("vars"):
+            clean["vars"] = c["vars"]
+        if c.get("parameters"):
+            clean["parameters"] = c["parameters"]
+        models_on = [m for m in (c.get("models") or []) if m.get("enabled")]
+        if models_on:
+            clean["models"] = [
+                {"file": m["file"], "section": m["section"]} for m in models_on
+            ]
+        if clean:
+            detail[name] = clean
+    return enabled, detail
+
+
+def _compact_session_info(info: dict) -> dict:
+    return {
+        "id": info.get("session") or "",
+        "app": info.get("application") or "",
+        "mode": ("Editing" if info.get("editable")
+                 else "Reading" if info.get("editable") is False
+                 else None),
+        "unsaved": bool(info.get("unsaved_changes")),
+        "test": info.get("test") or "",
+    }
+
+
+def _compact_status(status: dict) -> dict:
+    out = {}
+    if status.get("run_mode"):
+        out["run_mode"] = status["run_mode"]
+    if status.get("job_control_mode"):
+        out["job_control"] = status["job_control_mode"]
+    msgs = status.get("messages") or {}
+    out["messages_count"] = {
+        "error":   len(msgs.get("error") or []),
+        "warning": len(msgs.get("warning") or []),
+        "info":    len(msgs.get("info") or []),
+    }
+    if status.get("run_plan"):
+        out["run_plan"] = status["run_plan"]
+    ch = status.get("current_history_handle")
+    if ch is not None:
+        out["current_history_handle"] = ch
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Latest history — parse its .log + tail of spectre.out.
+# ---------------------------------------------------------------------------
+
+def parse_history_log(log_text: str) -> dict:
+    """Parse a maestro history .log file into structured fields.
+
+    The format is stable across IC 6.1.x ::
+
+        Starting Single Run, Sweeps and Corners...
+        Current time: Sat Apr 18 13:02:09 2026
+        Best design point: 1
+        Design specs:
+            <test>\tcorner\t<corner_name> -
+            <output>\t\t<value>
+            ...
+        Design parameters:
+            <name>\t\t<value>
+            ...
+        <history_name>
+        Number of points completed: N
+        Number of simulation errors: N
+        <history_name> completed.
+        Current time: Sat Apr 18 13:02:28 2026
+
+    Returns a dict with timing / status / specs / design_params.
+    """
+    result: dict = {
+        "timing": {},
+        "status": "unknown",
+        "best_design_point": None,
+        "points_completed": None,
+        "errors_count": None,
+        "specs": [],
+        "design_params": {},
+    }
+    if not log_text:
+        return result
+
+    time_matches: list[str] = []
+    current_test: str | None = None
+    current_corner: str | None = None
+    mode: str | None = None     # "specs" or "params"
+    any_completed = False
+
+    for raw_line in log_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if m := re.match(r"Current time:\s*(.+)", stripped):
+            time_matches.append(m.group(1).strip())
+            continue
+        if m := re.match(r"Best design point:\s*(\d+)", stripped):
+            result["best_design_point"] = int(m.group(1))
+            continue
+        if m := re.match(r"Number of points completed:\s*(\d+)", stripped):
+            result["points_completed"] = int(m.group(1))
+            continue
+        if m := re.match(r"Number of simulation errors:\s*(\d+)", stripped):
+            result["errors_count"] = int(m.group(1))
+            continue
+        if stripped == "Design specs:":
+            mode = "specs"
+            continue
+        if stripped == "Design parameters:":
+            mode = "params"
+            continue
+        if stripped.endswith(" completed."):
+            any_completed = True
+            mode = None
+            continue
+
+        if mode == "specs" and "\t" in line:
+            parts = [p for p in line.split("\t") if p]
+            # Header: "<test>\tcorner\t<corner_name>\t-"
+            if len(parts) >= 3 and parts[1] == "corner":
+                current_test = parts[0].strip()
+                current_corner = parts[2].strip()
+                continue
+            # Data: "<output>\t\t<value>"
+            if len(parts) == 2 and current_test:
+                result["specs"].append({
+                    "test": current_test,
+                    "corner": current_corner or "",
+                    "output": parts[0].strip(),
+                    "value": parts[1].strip(),
+                })
+            continue
+
+        if mode == "params" and "\t" in line:
+            parts = [p.strip() for p in line.split("\t") if p.strip()]
+            if len(parts) == 2:
+                result["design_params"][parts[0]] = parts[1]
+            continue
+
+    if time_matches:
+        result["timing"]["started"] = time_matches[0]
+    if len(time_matches) >= 2:
+        result["timing"]["finished"] = time_matches[-1]
+        try:
+            import datetime as _dt
+            fmt = "%a %b %d %H:%M:%S %Y"
+            t0 = _dt.datetime.strptime(time_matches[0], fmt)
+            t1 = _dt.datetime.strptime(time_matches[-1], fmt)
+            result["timing"]["duration_seconds"] = int((t1 - t0).total_seconds())
+        except ValueError:
+            pass
+
+    if any_completed:
+        result["status"] = "completed"
+    elif len(time_matches) == 1:
+        result["status"] = "running"
+    elif result["errors_count"]:
+        result["status"] = "failed"
+
+    return result
+
+
+def read_latest_history(client: VirtuosoClient, info: dict, *,
+                        scratch_root: str | None = None,
+                        spectre_tail_lines: int = 40,
+                        log_cache_path: str | None = None,
+                        spectre_cache_path: str | None = None) -> dict:
+    """Parse the newest completed history's .log file + spectre.out tail.
+
+    Picks the highest-N history (with actual scratch data when
+    ``scratch_root`` is provided).  Returns empty dict if no candidate.
+
+    Cost: ~1 scp for the .log file, +1 scp for spectre.out (if
+    scratch_root given and run path is discoverable).
+    """
+    lib_path = info.get("lib_path") or ""
+    cell = info.get("cell") or ""
+    view = info.get("view") or ""
+    if not (lib_path and cell and view):
+        return {}
+
+    # Pick the latest history
+    hist_base_meta = f"{lib_path}/{cell}/{view}/results/maestro"
+    latest = ""
+    latest_run: dict | None = None
+
+    if scratch_root:
+        per_hist = find_history_paths(client, info, scratch_root=scratch_root)
+        # Latest non-empty
+        for entry in reversed(per_hist):
+            if entry.get("runs"):
+                latest = entry["name"]
+                latest_run = entry["runs"][0]
+                break
+        if not latest and per_hist:
+            latest = per_hist[-1]["name"]
+    else:
+        hl = info.get("history_list") or []
+        if hl:
+            latest = hl[-1]
+
+    if not latest:
+        return {}
+
+    # Download + parse .log
+    log_remote = f"{hist_base_meta}/{latest}.log"
+    try:
+        log_text = read_remote_file(client, log_remote, local_path=log_cache_path)
+    except Exception:
+        log_text = ""
+
+    parsed = parse_history_log(log_text) if log_text else {}
+
+    out: dict = {
+        "history_name": latest,
+        **parsed,
+        "metadata_files": {
+            "log":    log_remote,
+            "rdb":    f"{hist_base_meta}/{latest}.rdb",
+            "msg_db": f"{hist_base_meta}/{latest}.msg.db",
+        },
+    }
+
+    if latest_run:
+        out["run_id"] = latest_run["run_id"]
+        out["hist_tag"] = latest_run["hist_tag"]
+        out["scratch_files"] = {
+            "netlist_scs":      latest_run["netlist"]["input_scs"],
+            "design_variables": latest_run["netlist"]["design_variables"],
+            "model_files":      latest_run["netlist"]["model_files"],
+            "spectre_out":      latest_run["psf"]["spectre_out"],
+            "psf_dir":          latest_run["psf"]["waveforms_dir"],
+        }
+
+        # Pull spectre.out tail
+        spectre_remote = latest_run["psf"]["spectre_out"]
+        try:
+            text = read_remote_file(client, spectre_remote,
+                                    local_path=spectre_cache_path)
+            lines = text.splitlines()
+            out["spectre_tail"] = lines[-spectre_tail_lines:] if len(lines) > spectre_tail_lines else lines
+            # Error / warning count (scan full file, not just tail)
+            err = sum(1 for l in lines
+                      if "Error" in l or "*Error*" in l or "ERROR" in l)
+            warn = sum(1 for l in lines
+                       if "Warning" in l or "*Warning*" in l)
+            out["spectre_errors_count"] = err
+            out["spectre_warnings_count"] = warn
+        except Exception:
+            out["spectre_tail"] = []
+
+    return out
+
+
+def snapshot_to_dir(client: VirtuosoClient, *,
+                    output_root: str,
+                    info: dict | None = None,
+                    scratch_root: str | None = None,
+                    include_results: bool = False,
+                    include_latest_history: bool = True,
+                    include_raw_skill: bool = True,
+                    include_metrics: bool = True) -> "Path":
+    """Snapshot the focused maestro session and write all artifacts to a
+    fresh timestamped directory.
+
+    Typical two-step usage (primitives separate so the caller can inspect
+    / log / assert on the focused session before committing)::
+
+        info = read_session_info(client)
+        print(f"Focused on {info['lib']}/{info['cell']}")
+        path = snapshot_to_dir(client, info=info,
+                               output_root="output/snapshots")
+
+    If ``info`` is ``None``, it will be fetched internally.
+
+    If ``scratch_root`` is ``None``, it's auto-detected by scanning the
+    downloaded ``maestro.sdb`` for ``{prefix}/{lib}/{cell}/{view}/results/
+    maestro/`` patterns.  Detection failure simply skips the
+    scratch-dependent enrichment (histories run paths, spectre.out tail,
+    etc.) — no error.
+
+    Directory layout ``{output_root}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/``::
+
+        snapshot.json            structured setup
+        maestro.sdb              raw Cadence XML
+        histories.json           per-history run paths (if scratch detected)
+        latest_history.json      newest run's .log + spectre.out tail
+        raw_skill.json           every execute_skill call's input/output
+        probe_log.json           wall time + skill/scp counts + file sizes
+
+    Returns the snapshot directory ``Path``.
+    """
+    import json
+    import time
+    from datetime import datetime
+    from pathlib import Path
+
+    output_root_path = Path(output_root)
+
+    # Optional wire-level recorder (monkey-patches execute_skill).
+    records: list[dict] = []
+    counters = {"skill_calls": 0, "skill_time": 0.0,
+                "scp_transfers": 0, "scp_time": 0.0}
+    orig_skill = client.execute_skill
+    orig_download = client.download_file
+    orig_upload = client.upload_file
+
+    if include_metrics:
+        def skill_wrapper(skill_code, *a, **kw):
+            t0 = time.perf_counter()
+            r = None
+            try:
+                r = orig_skill(skill_code, *a, **kw)
+                return r
+            finally:
+                dt = time.perf_counter() - t0
+                counters["skill_calls"] += 1
+                counters["skill_time"] += dt
+                if include_raw_skill:
+                    records.append({
+                        "idx": len(records),
+                        "expr": skill_code,
+                        "output": (r.output or "") if r is not None else "",
+                        "ms": round(dt * 1000, 2),
+                    })
+
+        def download_wrapper(*a, **kw):
+            t0 = time.perf_counter()
+            try:
+                return orig_download(*a, **kw)
+            finally:
+                counters["scp_transfers"] += 1
+                counters["scp_time"] += time.perf_counter() - t0
+
+        def upload_wrapper(*a, **kw):
+            t0 = time.perf_counter()
+            try:
+                return orig_upload(*a, **kw)
+            finally:
+                counters["scp_transfers"] += 1
+                counters["scp_time"] += time.perf_counter() - t0
+
+        client.execute_skill = skill_wrapper
+        client.download_file = download_wrapper
+        client.upload_file = upload_wrapper
+
+    t0 = time.perf_counter()
+    try:
+        if info is None:
+            info = read_session_info(client)
+        sess = info.get("session") or ""
+        if not sess:
+            raise RuntimeError("No focused maestro window.")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        lib = info.get("lib") or "unknown_lib"
+        cell = info.get("cell") or "unknown_cell"
+        view = info.get("view") or "maestro"
+        snap_dir = output_root_path / f"{ts}__{lib}__{cell}"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        local_sdb = snap_dir / "maestro.sdb"
+
+        # Auto-detect scratch_root from sdb if not supplied.  This obsoletes
+        # any per-lib lookup table — Cadence already records the path.
+        if scratch_root is None and info.get("sdb_path"):
+            try:
+                xml_text = read_remote_file(
+                    client, info["sdb_path"],
+                    local_path=str(local_sdb), reuse_if_exists=True,
+                )
+                scratch_root = detect_scratch_root_from_sdb(
+                    xml_text, lib, cell, view,
+                    lib_path=info.get("lib_path"),
+                )
+            except Exception:
+                scratch_root = None
+
+        snap = snapshot(
+            client,
+            include_results=include_results,
+            include_latest_history=include_latest_history,
+            sdb_cache_path=str(local_sdb),
+            scratch_root=scratch_root,
+        )
+        snap["scratch_root_detected"] = scratch_root
+
+        # Split the bulky / auxiliary sections into sibling files.
+        histories = snap.pop("histories", None)
+        if histories is not None:
+            (snap_dir / "histories.json").write_text(
+                json.dumps({"histories": histories}, indent=2,
+                           ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            snap["histories_file"] = "histories.json"
+            snap["histories_summary"] = {
+                "count": len(histories),
+                "with_runs": sum(1 for h in histories if h["runs"]),
+                "total_runs": sum(len(h["runs"]) for h in histories),
+            }
+
+        latest = snap.pop("latest_history", None)
+        if latest:
+            (snap_dir / "latest_history.json").write_text(
+                json.dumps(latest, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            snap["latest_history_file"] = "latest_history.json"
+            snap["latest_history_summary"] = {
+                "name":   latest.get("history_name"),
+                "status": latest.get("status"),
+                "duration_seconds": (latest.get("timing") or {}).get("duration_seconds"),
+                "errors_count":     latest.get("errors_count"),
+                "points_completed": latest.get("points_completed"),
+            }
+
+        (snap_dir / "snapshot.json").write_text(
+            json.dumps(snap, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+        if include_raw_skill and records:
+            (snap_dir / "raw_skill.json").write_text(
+                json.dumps({"calls": records}, indent=2,
+                           ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+
+        if include_metrics:
+            def _count_lines(p: Path) -> int:
+                try:
+                    with open(p, "rb") as fh:
+                        return sum(1 for _ in fh)
+                except OSError:
+                    return 0
+
+            artifacts = {
+                f.name: {"bytes": f.stat().st_size, "lines": _count_lines(f)}
+                for f in sorted(snap_dir.glob("*"))
+                if f.is_file() and f.name != "probe_log.json"
+            }
+            wall = time.perf_counter() - t0
+            metrics_doc = {
+                "timestamp": ts,
+                "session": sess,
+                "lib": lib,
+                "cell": cell,
+                "artifacts": artifacts,
+                "artifacts_totals": {
+                    "bytes": sum(a["bytes"] for a in artifacts.values()),
+                    "lines": sum(a["lines"] for a in artifacts.values()),
+                },
+                "totals": {
+                    "wall_s": round(wall, 4),
+                    "skill_calls": counters["skill_calls"],
+                    "scp_transfers": counters["scp_transfers"],
+                    "skill_time_s": round(counters["skill_time"], 4),
+                    "scp_time_s": round(counters["scp_time"], 4),
+                },
+            }
+            (snap_dir / "probe_log.json").write_text(
+                json.dumps(metrics_doc, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        return snap_dir
+    finally:
+        if include_metrics:
+            client.execute_skill = orig_skill
+            client.download_file = orig_download
+            client.upload_file = orig_upload
+
+
 def snapshot(client: VirtuosoClient, *,
              include_results: bool = False,
-             sdb_cache_path: str | None = None) -> dict:
+             include_raw: bool = False,
+             include_latest_history: bool = True,
+             sdb_cache_path: str | None = None,
+             scratch_root: str | None = None) -> dict:
     """Aggregate snapshot of the currently-focused maestro session.
 
     Always uses the focused window (``hiGetCurrentWindow()``) as the
     source of truth — no session parameter.  Combines session_info +
-    status + config + env + variables + outputs + corners.  When
-    ``include_results=True`` also calls ``read_results`` (GUI mode only,
-    may be slow).  Pass ``sdb_cache_path`` to persist the downloaded
-    ``maestro.sdb`` on disk (shared with corner parsing).
+    status + tests + enabled_analyses + analyses + env_options +
+    sim_options + variables + outputs + corners.
+
+    Flags:
+
+    - ``include_results=True`` — also call ``read_results`` (GUI mode
+      only, may be slow)
+    - ``include_raw=True`` — also attach ``raw_probes`` with the
+      uninterpreted SKILL output strings, for debug / audit / offline
+      re-parse.  Defaults off to keep the snapshot lean.
+    - ``sdb_cache_path`` — persist the downloaded ``maestro.sdb`` on
+      disk (shared with corner / variable parsing).
+    - ``scratch_root`` — install-specific sim scratch prefix (e.g.
+      ``/server_local_ssd/USER/simulation``); enables emission of the
+      ``histories`` field with full per-run file paths.
     """
     info = read_session_info(client, sdb_cache_path=sdb_cache_path)
     sess = info.get("session") or ""
+
+    cfg_raw = read_config_raw(client, sess) if sess else {}
+    env_raw = read_env_raw(client, sess) if sess else {}
+    cfg = _parse_config(cfg_raw)
+    env = _parse_env(env_raw)
+
+    variables = read_variables(
+        client, sess,
+        sdb_path=info.get("sdb_path") or None,
+        local_sdb_path=sdb_cache_path,
+        reuse_local=True,
+    ) if sess else {}
+
+    outputs = read_outputs(client, sess) if sess else []
+
+    corners = read_corners(
+        client, sess,
+        sdb_path=info.get("sdb_path") or None,
+        local_sdb_path=sdb_cache_path,
+        reuse_local=True,
+    )
+
+    parameters: list[dict] = []
+    if info.get("sdb_path"):
+        xml_text = read_remote_file(
+            client, info["sdb_path"],
+            local_path=sdb_cache_path, reuse_if_exists=True,
+        )
+        parameters = parse_parameters_from_sdb_xml(xml_text)
+
+    status = read_status(client, sess) if sess else {}
+    corners_enabled, corners_detail = _compact_corners(corners)
+    env_opts = env.get("env_options") or {}
+
     out: dict = {
-        "session_info": info,
-        "status": read_status(client, sess) if sess else {},
-        "config": read_config(client, sess) if sess else {},
-        "env": read_env(client, sess) if sess else {},
-        "variables": read_variables(
-            client, sess,
-            sdb_path=info.get("sdb_path") or None,
-            local_sdb_path=sdb_cache_path,
-            reuse_local=True,
-        ) if sess else {},
-        "outputs": read_outputs(client, sess) if sess else [],
-        "corners": read_corners(
-            client, sess,
-            sdb_path=info.get("sdb_path") or None,
-            local_sdb_path=sdb_cache_path,
-            reuse_local=True,
+        # --- Identity --------------------------------------------------
+        "location": "/".join(
+            p for p in (info.get("lib"), info.get("cell"), info.get("view")) if p
         ),
+        "session": _compact_session_info(info),
+
+        # --- What will run --------------------------------------------
+        "analyses": cfg.get("analyses") or {},
+
+        # --- Design knobs ---------------------------------------------
+        "variables": variables,
+        "parameters": parameters,
+
+        # --- Measurements ---------------------------------------------
+        "outputs": _compact_outputs(outputs),
+
+        # --- Process / corners ----------------------------------------
+        "corners_enabled": corners_enabled,
+        "corners_detail":  corners_detail,
+        "models":          _extract_models(env_opts),
+
+        # --- Simulator settings ---------------------------------------
+        "simulator":    env_opts.get("simExecName") or "",
+        "control_mode": env_opts.get("controlMode") or "",
+        "sim_options":  _compact_sim_options(env.get("sim_options") or {}),
+
+        # --- Runtime --------------------------------------------------
+        "status": _compact_status(status),
+
+        # --- Paths (absolute, on the remote) --------------------------
+        "paths": {
+            "lib":          info.get("lib_path") or "",
+            "sdb":          info.get("sdb_path") or "",
+            "results_base": info.get("results_base") or "",
+        },
     }
+
+    if include_raw:
+        out["raw_probes"] = {"config": cfg_raw, "env": env_raw}
     if include_results:
         out["results"] = read_results(
             client, sess,
             lib=info.get("lib", ""), cell=info.get("cell", ""))
+    if scratch_root:
+        out["histories"] = find_history_paths(
+            client, info, scratch_root=scratch_root,
+        )
+    if include_latest_history:
+        out["latest_history"] = read_latest_history(
+            client, info, scratch_root=scratch_root,
+        )
     return out
