@@ -536,117 +536,181 @@ def read_outputs(client: VirtuosoClient, session: str,
     return _parse_sev_outputs(r.output or "")
 
 
-_MAE_TITLE_RE = re.compile(r"Assembler\s+Editing:\s+(\S+)\s+(\S+)\s+maestro\b")
-_INTERACTIVE_RE = re.compile(r"^(Interactive|MonteCarlo)\.[0-9]+(?:\.rdb)?$")
-_SKILL_4TUPLE_RE = re.compile(
-    r'\("([^"]*)"\s+"([^"]*)"\s+"([^"]*)"\s+"([^"]*)"\)'
+_MAE_TITLE_RE = re.compile(
+    r"Assembler\s+(?:Editing|Reading):\s+(\S+)\s+(\S+)\s+(\S+)\s*$"
 )
+_INTERACTIVE_RE = re.compile(r"^(Interactive|MonteCarlo)\.[0-9]+(?:\.rdb)?$")
+_CANONICAL_SDB_RE = re.compile(r"^[^.]+\.sdb$")   # e.g. maestro.sdb, maestro_MC.sdb
+
+
+def _match_mae_title(titles):
+    """Return (lib, cell, view) from the first maestro-like title, or empty.
+
+    The view may end with ``*`` in the title (Virtuoso's "unsaved changes"
+    indicator) — strip it.
+    """
+    for n in titles or ():
+        if not n:
+            continue
+        m = _MAE_TITLE_RE.search(n)
+        if m:
+            view = m.group(3).rstrip("*")
+            return m.group(1), m.group(2), view
+    return "", "", ""
 
 
 def read_session_info(client: VirtuosoClient, session: str) -> dict:
     """Read maestro session metadata: lib/cell/view, sdb path, results dir, histories.
 
     Performs at most two SKILL round-trips:
-      1. window names + test list           (independent of lib/cell)
-      2. lib path + history list + dirs     (depend on parsed lib/cell)
+      1. currently-focused window name + all window names + test list
+      2. lib path + view-directory listing + history list
 
-    Falls back to a third call only if the maestro title is not parseable.
+    The focused window (``hiGetCurrentWindow()``) is preferred so that when
+    multiple maestro sessions are open simultaneously, we report the one the
+    user is actively interacting with.
+
+    The view name is extracted from the title rather than hardcoded, so
+    ``maestro`` / ``maestro_MC`` / any other view works.  The sdb filename is
+    discovered by listing the view directory and filtering with a strict
+    ``^[^.]+\.sdb$`` regex (rejecting ``.cdslck``, ``.old``, ``.bak``, etc.).
     """
-    # --- Round 1: window names + test list -----------------------------------
+    # --- Round 1: current + all window names + test list --------------------
+    # Note: no geGetEditCellView / geGetWindowCellView here — those warn on
+    # non-graphic windows like the maestro Assembler (GE-2067).
     r = client.execute_skill(
-        f'list(mapcar(lambda((w) hiGetWindowName(w)) hiGetWindowList()) '
-        f'maeGetSetup(?session "{session}"))'
+        f'let((cw) '
+        f'cw = hiGetCurrentWindow() '
+        f'list('
+        f'  if(cw hiGetWindowName(cw) nil) '
+        f'  mapcar(lambda((w) hiGetWindowName(w)) hiGetWindowList()) '
+        f'  maeGetSetup(?session "{session}")))'
     )
     raw = r.output or ""
 
-    # The outer list has exactly two sublists; split them at the top level.
-    names: list[str] = []
-    tests_raw = ""
-    depth = 0
-    chunks: list[str] = []
-    start = -1
-    in_str = False
+    # Split top-level into three slots:  curName, allNames list, tests list
     body = raw.strip()
     if body.startswith("(") and body.endswith(")"):
         body = body[1:-1]
-    for i, ch in enumerate(body):
-        if ch == '"' and (i == 0 or body[i - 1] != "\\"):
-            in_str = not in_str
-        if in_str:
+
+    chunks: list[str] = []
+    depth = 0
+    start = -1
+    i = 0
+    n = len(body)
+    while i < n and len(chunks) < 3:
+        ch = body[i]
+        # Top-level-only quoted string chunking.  Inside a paren group,
+        # we must NOT treat a `"` as a chunk boundary — we just scan past
+        # its contents without incrementing depth.
+        if depth == 0 and ch == '"' and (i == 0 or body[i - 1] != "\\"):
+            j = i + 1
+            while j < n and not (body[j] == '"' and body[j - 1] != "\\"):
+                j += 1
+            chunks.append(body[i:j + 1])
+            i = j + 1
+            while i < n and body[i].isspace():
+                i += 1
+            continue
+        if depth > 0 and ch == '"':
+            # Skip past an inner string literal without descending/ascending.
+            j = i + 1
+            while j < n and not (body[j] == '"' and body[j - 1] != "\\"):
+                j += 1
+            i = j + 1
             continue
         if ch == "(":
             if depth == 0:
                 start = i
             depth += 1
-        elif ch == ")":
+            i += 1
+            continue
+        if ch == ")":
             depth -= 1
             if depth == 0 and start >= 0:
                 chunks.append(body[start:i + 1])
                 start = -1
-    if len(chunks) >= 1:
-        names = _parse_skill_str_list(chunks[0])
-    if len(chunks) >= 2:
-        tests_raw = chunks[1]
-    tests = _parse_skill_str_list(tests_raw)
+            i += 1
+            continue
+        if depth == 0 and ch.isspace():
+            i += 1
+            continue
+        if depth == 0:
+            j = i
+            while j < n and not body[j].isspace() and body[j] not in "()":
+                j += 1
+            chunks.append(body[i:j])
+            i = j
+            continue
+        i += 1
+
+    while len(chunks) < 3:
+        chunks.append("nil")
+
+    cur_name = chunks[0].strip().strip('"') if chunks[0] != "nil" else ""
+    all_names = _parse_skill_str_list(chunks[1])
+    tests = _parse_skill_str_list(chunks[2])
     test = tests[0] if tests else ""
 
-    # --- Parse lib/cell/view from window titles in Python --------------------
-    lib = cell = view = ""
-    for n in names:
-        m = _MAE_TITLE_RE.search(n)
-        if m:
-            lib, cell = m.group(1), m.group(2)
-            view = "maestro"
-            break
-
+    # --- Identify which maestro window the user is on -----------------------
+    # Prefer the focused window; fall back to scanning all windows.
+    lib, cell, view = _match_mae_title([cur_name])
     if not lib:
-        # Fallback: cellview-backed windows (uses a second call)
-        r = client.execute_skill('''
-let((result)
-  foreach(w hiGetWindowList()
-    let((cv nm)
-      nm = hiGetWindowName(w)
-      cv = geGetWindowCellView(w)
-      when(and(cv stringp(nm))
-        result = cons(list(cv~>libName cv~>cellName cv~>viewName nm) result))))
-  result)
-''')
-        for m2 in _SKILL_4TUPLE_RE.finditer(r.output or ""):
-            if "Assembler" in m2.group(4) or "maestro" in m2.group(4).lower():
-                lib, cell, view = m2.group(1), m2.group(2), m2.group(3)
-                break
+        lib, cell, view = _match_mae_title(all_names)
 
-    # --- Round 2: lib_path + history in one let -----------------------------
-    # (maeGetNetlistDir / maeGetResultsDir are absent in IC 6.1.8; derive from
-    # lib_path + cell instead.)
+    # --- Round 2: lib_path + view-dir listing + history listing ------------
     lib_path = ""
     history_list: list[str] = []
+    sdb_files: list[str] = []
 
-    if lib and cell:
+    if lib and cell and view:
         r = client.execute_skill(
-            f'let((libObj libPath histBase) '
+            f'let((libObj libPath viewDir histBase) '
             f'libObj = ddGetObj("{lib}") '
             f'libPath = if(libObj libObj~>readPath "") '
-            f'histBase = strcat(libPath "/{cell}/maestro/results/maestro") '
-            f'list(libPath if(isDir(histBase) getDirFiles(histBase) nil)))'
+            f'viewDir = strcat(libPath "/{cell}/{view}") '
+            f'histBase = strcat(viewDir "/results/maestro") '
+            f'list(libPath '
+            f'     if(isDir(viewDir) getDirFiles(viewDir) nil) '
+            f'     if(isDir(histBase) getDirFiles(histBase) nil)))'
         )
         raw2 = (r.output or "").strip()
-        # Expect ("/lib/path" ("f1" "f2" ...))
         if raw2.startswith("(") and raw2.endswith(")"):
             body2 = raw2[1:-1]
             m = re.match(r'\s*"([^"]*)"\s*(.*)$', body2, re.DOTALL)
             if m:
                 lib_path = m.group(1)
                 rest = m.group(2).strip()
-                raw_hist = _parse_skill_str_list(rest)
-                # Histories may appear either as a bare dir "Interactive.N" or
-                # via their metadata files (e.g. "Interactive.N.rdb" sibling
-                # when data lives in a scratch results dir).  Accept both and
-                # de-duplicate on the bare name.
+                # rest = (view-dir-files) (hist-files)
+                parts2: list[str] = []
+                depth = 0
+                p_start = -1
+                p_in_str = False
+                for j, c in enumerate(rest):
+                    if c == '"' and (j == 0 or rest[j - 1] != "\\"):
+                        p_in_str = not p_in_str
+                    if p_in_str:
+                        continue
+                    if c == "(":
+                        if depth == 0:
+                            p_start = j
+                        depth += 1
+                    elif c == ")":
+                        depth -= 1
+                        if depth == 0 and p_start >= 0:
+                            parts2.append(rest[p_start:j + 1])
+                            p_start = -1
+                view_dir_files = _parse_skill_str_list(parts2[0]) if len(parts2) >= 1 else []
+                hist_dir_files = _parse_skill_str_list(parts2[1]) if len(parts2) >= 2 else []
+
+                # sdb files: strict canonical names only, no .cdslck/.old/.bak
+                sdb_files = [f for f in view_dir_files if _CANONICAL_SDB_RE.match(f)]
+
+                # histories: Interactive.N or Interactive.N.rdb → dedupe on bare name
                 seen: set[str] = set()
-                for h in raw_hist:
-                    m = _INTERACTIVE_RE.match(h)
-                    if m:
+                for h in hist_dir_files:
+                    mm = _INTERACTIVE_RE.match(h)
+                    if mm:
                         bare = h[:-4] if h.endswith(".rdb") else h
                         seen.add(bare)
                 history_list = sorted(
@@ -655,9 +719,17 @@ let((result)
                     if h.rsplit(".", 1)[-1].isdigit() else -1
                 )
 
-    sdb_path = f"{lib_path}/{cell}/maestro/maestro.sdb" if lib_path and cell else ""
+    # Pick the sdb: prefer "{view}.sdb" (OA convention), else first strict match.
+    sdb_name = ""
+    if sdb_files:
+        preferred = f"{view}.sdb"
+        sdb_name = preferred if preferred in sdb_files else sdb_files[0]
+
+    sdb_path = (f"{lib_path}/{cell}/{view}/{sdb_name}"
+                if lib_path and cell and view and sdb_name else "")
     results_base = (
-        f"{lib_path}/{cell}/maestro/results/maestro" if lib_path and cell else ""
+        f"{lib_path}/{cell}/{view}/results/maestro"
+        if lib_path and cell and view else ""
     )
 
     return {
