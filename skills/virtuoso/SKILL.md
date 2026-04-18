@@ -67,7 +67,7 @@ All `virtuoso-bridge` CLI commands and Python scripts must run inside the activa
 
 ### Connection sequence (follow in order)
 
-1. **Check `.env`** — if the project has no `.env` yet, run **`virtuoso-bridge init`** to create one. If `.env` already exists, skip `init`.
+1. **Check `.env`** — the bridge looks up `.env` in this order: `--env FILE` (CLI flag) → `./.env` (project-local) → `~/.virtuoso-bridge/.env` (user-level). If **any** of these exists, skip `init`. Only run **`virtuoso-bridge init`** when none exist — it creates `~/.virtuoso-bridge/.env` by default (user-level, shared across projects).
 2. **`virtuoso-bridge start`** — starts the local bridge service and SSH tunnel.
 3. **If status is `degraded`** — the user must load the setup script in Virtuoso CIW (the `start` output tells them exactly what to run).
 4. **`virtuoso-bridge status`** — verify everything is `healthy` before proceeding.
@@ -191,14 +191,14 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 - `07–10` — delete/clear operations
 
 ### `examples/01_virtuoso/maestro/`
-- `01_read_open_maestro.py` — read config from the currently open maestro
-- `02_gui_open_read_close_maestro.py` — GUI open → read config → close
+- `01_read_focused_maestro.py` — in-memory snapshot of the focused maestro (config + env + results + outputs + corners + variables)
 - `03_bg_open_read_close_maestro.py` — background open → read config → close
-- `04_read_env.py` — read environment settings (model files, sim options, run mode)
-- `05_read_results.py` — read simulation results (output values, specs, yield)
 - `06a_rc_create.py` — create RC schematic + Maestro setup
 - `06b_rc_simulate.py` — run simulation
 - `06c_rc_read_results.py` — read results, export waveforms, open GUI
+- `07_gui_session_lifecycle.py` — GUI session lifecycle integration test (open/close edge cases)
+- `08_gui_open_snapshot_close.py` — GUI open → snapshot artifacts → close (owns lifecycle)
+- `09_snapshot_with_metrics.py` — snapshot the focused maestro to a timestamped directory (disk artifacts)
 
 ## Common workflows
 

@@ -460,21 +460,28 @@ class SSHRunner:
         cmd = self._build_ssh_base() + ["sh"]
         self._print_cmd(cmd)
         logger.info("[server] %s", command)
+        # Use bytes (text=False) to bypass Windows universal-newlines translation
+        # of '\n' → '\r\n' on stdin. Heredoc payloads (cat > file << EOF ...)
+        # otherwise land on the remote with CRLF line endings, which csh reads
+        # as part of the next token (e.g. `source /path/to/cshrc\r` → file not
+        # found). On POSIX the behavior is identical to text mode.
         result = subprocess.run(
             cmd,
-            input=command,
+            input=command.encode("utf-8"),
             capture_output=True,
-            text=True,
+            text=False,
             timeout=effective_timeout,
             **_windows_no_window_kwargs(),
         )
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace")
         logger.debug(
             "Remote command returned %d (stdout=%d bytes, stderr=%d bytes)",
             result.returncode,
-            len(result.stdout),
-            len(result.stderr),
+            len(stdout),
+            len(stderr),
         )
-        return CommandResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        return CommandResult(returncode=result.returncode, stdout=stdout, stderr=stderr)
 
     def upload(
         self,

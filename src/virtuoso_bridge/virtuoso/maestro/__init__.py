@@ -31,6 +31,7 @@ from virtuoso_bridge.virtuoso.maestro.reader import (
     snapshot_to_dir,
     detect_session_for_focus,
     detect_scratch_root_from_sdb,
+    detect_scratch_root_via_skill,
     find_history_paths,
     snapshot,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "snapshot_to_dir",
     "detect_session_for_focus",
     "detect_scratch_root_from_sdb",
+    "detect_scratch_root_via_skill",
     "find_history_paths",
     "snapshot",
     # write - test

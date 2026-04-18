@@ -13,6 +13,7 @@ Usage::
     Running this script from VSCode without passing <LIB> will NOT work.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -50,12 +51,11 @@ def main() -> int:
     client = VirtuosoClient.from_env()
 
     session = open_session(client, lib, CELL)
-
-    for key, (skill_expr, raw) in read_config(client, session).items():
-        print(f"[{key}] {skill_expr}")
-        print(raw)
-
-    close_session(client, session)
+    try:
+        cfg = read_config(client, session)
+        print(json.dumps(cfg, indent=2, default=str))
+    finally:
+        close_session(client, session)
     return 0
 
 

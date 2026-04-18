@@ -726,6 +726,7 @@ _SCREENSHOT_TARGET: list[str] = ["ciw"]
 def cli_windows() -> int:
     """List all open Virtuoso windows."""
     _load_cli_env()
+    import sys
     from virtuoso_bridge import VirtuosoClient
 
     client = VirtuosoClient.from_env()
@@ -733,8 +734,34 @@ def cli_windows() -> int:
     if not windows:
         print("No windows found.")
         return 1
+
+    # Resolve SKILL-side focused window so we can highlight it in the
+    # listing.  Independent of OS window manager focus.
+    focused_num = ""
+    try:
+        r = client.execute_skill(
+            "let((w) w = hiGetCurrentWindow() "
+            "if(w sprintf(nil \"%d\" w~>windowNum) \"\"))"
+        )
+        focused_num = (r.output or "").strip().strip('"')
+    except Exception:
+        focused_num = ""
+
+    use_color = sys.stdout.isatty()
+    BOLD = "\033[1m" if use_color else ""
+    RESET = "\033[0m" if use_color else ""
+
+    focused_name = next(
+        (w["name"] for w in windows if w["num"] == focused_num), "")
+    if focused_num:
+        label = f"{focused_num}  {focused_name}" if focused_name else focused_num
+        print(f"Focused: {BOLD}{label}{RESET}\n")
+
     for w in windows:
-        print(f"{w['num']:>4}  {w['name']}")
+        is_focused = w["num"] == focused_num
+        marker = "*" if is_focused else " "
+        name = f"{BOLD}{w['name']}{RESET}" if is_focused else w["name"]
+        print(f"{marker} {w['num']:>4}  {name}")
     return 0
 
 
