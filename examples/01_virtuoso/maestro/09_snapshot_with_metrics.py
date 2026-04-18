@@ -23,7 +23,7 @@ from virtuoso_bridge import VirtuosoClient
 from virtuoso_bridge.virtuoso.maestro import read_session_info, snapshot_to_dir
 
 
-OUTPUT_ROOT = Path(__file__).parent / "output_snapshots"
+OUTPUT_ROOT = Path(__file__).parent.parent.parent.parent / "output"
 
 
 def main() -> int:
