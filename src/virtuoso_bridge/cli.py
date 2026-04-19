@@ -851,17 +851,30 @@ def cli_snapshot() -> int:
 
 
 def _format_var_value(v: dict) -> str:
-    """Pretty one-liner for a sdb variable value_info."""
+    """Compact ``key=value`` rendering of one sdb variable value_info."""
     raw = v.get("raw", "")
     kind = v.get("kind", "scalar")
-    enabled_tag = "" if v.get("enabled", True) else "  [disabled]"
+    disabled = "" if v.get("enabled", True) else "(disabled)"
     if kind == "range_sweep":
-        return (f"{raw}  (sweep, {v.get('points_count','?')} points: "
-                f"{v.get('start')}→{v.get('stop')} step {v.get('step')}){enabled_tag}")
+        return f"{raw}[sweep,{v.get('points_count','?')}pts]{disabled}"
     if kind == "list_sweep":
-        vals = ", ".join(v.get("values", []))
-        return f"{raw}  (sweep over {vals}){enabled_tag}"
-    return f"{raw}{enabled_tag}"
+        return f"{raw}[sweep,{len(v.get('values', []))}pts]{disabled}"
+    return f"{raw}{disabled}"
+
+
+def _format_corner(name: str, c: dict) -> str:
+    """Compact one-liner for an enabled corner."""
+    temp = c.get("temperature") or []
+    cvars = c.get("vars") or {}
+    models = [m for m in (c.get("models") or []) if m.get("enabled")]
+    bits: list[str] = []
+    if temp:
+        bits.append(f"T={'/'.join(temp)}")
+    if cvars:
+        bits.append(",".join(f"{k}={v}" for k, v in cvars.items()))
+    if models:
+        bits.append(f"{len(models)}models")
+    return f"{name}({', '.join(bits)})" if bits else name
 
 
 def _print_maestro_brief(d: dict) -> None:
@@ -883,39 +896,26 @@ def _print_maestro_brief(d: dict) -> None:
     if analyses:
         print(f"analyses: {', '.join(analyses)}")
 
-    # --- Variables (full expansion) ---
+    # --- Variables (one line per scope, name=value comma-separated) ---
     if g:
-        print(f"variables (global, {len(g)}):")
-        for name, info in g.items():
-            print(f"  {name:<40}  {_format_var_value(info)}")
+        items = ", ".join(f"{n}={_format_var_value(v)}" for n, v in g.items())
+        print(f"vars(global): {items}")
     for test_name, vmap in pt.items():
         if not vmap:
             continue
-        print(f"variables (per_test / {test_name}, {len(vmap)}):")
-        for name, info in vmap.items():
-            print(f"  {name:<40}  {_format_var_value(info)}")
+        items = ", ".join(f"{n}={_format_var_value(v)}" for n, v in vmap.items())
+        print(f"vars({test_name}): {items}")
     if not g and not any(pt.values()):
-        print(f"variables: (none)")
+        print("vars    : (none)")
 
-    # --- Corners (full expansion of enabled) ---
-    print(f"corners ({len(enabled)} enabled):")
-    if not enabled:
-        print(f"  (none enabled)")
-    for name in enabled:
-        c = cdetail.get(name) or {}
-        temp = c.get("temperature") or []
-        cvars = c.get("vars") or {}
-        models = [m for m in (c.get("models") or []) if m.get("enabled")]
-        bits = []
-        if temp:
-            bits.append(f"T={'/'.join(temp)}")
-        if cvars:
-            bits.append("vars=" + ",".join(f"{k}={v}" for k, v in cvars.items()))
-        if models:
-            bits.append(f"models={len(models)}")
-        suffix = ("  " + "  ".join(bits)) if bits else ""
-        print(f"  {name}{suffix}")
+    # --- Corners (one line, name(detail) comma-separated) ---
+    if enabled:
+        items = ", ".join(_format_corner(n, cdetail.get(n) or {}) for n in enabled)
+        print(f"corners : {items}")
+    else:
+        print(f"corners : (none enabled)")
 
+    # --- Outputs (one per line — names + exprs are too long for one line) ---
     if odefs:
         print(f"outputs ({len(odefs)}, {computed} computed):")
         for o in odefs:
@@ -927,11 +927,10 @@ def _print_maestro_brief(d: dict) -> None:
                 expr = o.get("expr", "")
                 if len(expr) > 80:
                     expr = expr[:77] + "..."
-                print(f"  {name:<24}{ana_tag:<10} {expr}")
+                print(f"  {name}{ana_tag} = {expr}")
             else:
-                # save-only — show signal + type
                 t = o.get("type") or ""
-                print(f"  {name:<24}  save-only ({t})")
+                print(f"  {name} = save-only ({t})")
 
     # --- Latest run paths (for grep / inspection) ---
     # The .log lives in the OA library at a deterministic path; the
