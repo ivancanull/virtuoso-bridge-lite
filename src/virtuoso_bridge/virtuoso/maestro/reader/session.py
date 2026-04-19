@@ -157,9 +157,7 @@ def detect_scratch_root(client: VirtuosoClient, info: dict, *,
                 client, info["sdb_path"],
                 local_path=local_sdb_path, reuse_if_exists=True,
             )
-            return _detect_scratch_root_from_sdb(
-                xml_text, lib, cell, view, lib_path=info.get("lib_path"),
-            )
+            return _detect_scratch_root_from_sdb(xml_text, lib, cell, view)
         except Exception:
             return None
     return None

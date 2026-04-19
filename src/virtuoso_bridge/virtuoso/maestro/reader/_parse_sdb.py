@@ -10,43 +10,49 @@ import xml.etree.ElementTree as ET
 
 
 def _detect_scratch_root_from_sdb(xml_text: str, lib: str, cell: str,
-                                  view: str, *,
-                                  lib_path: str | None = None) -> str | None:
+                                  view: str) -> str | None:
     """Auto-detect the simulation scratch prefix from ``maestro.sdb``.
 
-    The sdb records two kinds of absolute paths that both look like
-    ``{prefix}/LIB/CELL/VIEW/results/maestro/...``:
+    Reads ``<historyentry>/<psfdir>`` elements directly — Cadence writes
+    the full scratch path there for completed runs, shaped::
 
-      - **metadata** location = ``{lib_path_parent}/LIB/...``
-        (where Interactive.N.log / .rdb / .msg.db live)
-      - **scratch** location = ``{scratch_root}/LIB/...``
-        (where the actual run data — netlist/psf — lives)
+        {scratch_root}/{lib}/{cell}/{view}/results/maestro/{history}
 
-    Pass ``lib_path`` so we can filter out the metadata prefix and
-    return only the scratch one.  Returns ``None`` if no scratch
-    reference is present (session never simulated / setup fresh).
+    Many ``<psfdir>`` elements are empty (older entries get cleared, or
+    the cell was never simulated); the first non-empty one wins — they
+    all share the same install prefix.
+
+    Returns ``None`` when no ``<psfdir>`` is filled (cell never simulated
+    or sdb predates this Cadence convention).
+
+    Earlier versions used a regex over the whole sdb text and most-common
+    voting across all ``{prefix}/LIB/CELL/VIEW/results/maestro/...``
+    matches.  That voting was wrong — the metadata prefix
+    (``{lib_path_parent}/...``) outnumbers the scratch prefix in sdb
+    references, so the wrong one won.  Reading ``<psfdir>`` directly is
+    both simpler and authoritative.
     """
     if not (xml_text and lib and cell and view):
         return None
-    pattern = re.compile(
-        rf'([^\s"<>]+?)/{re.escape(lib)}/{re.escape(cell)}/{re.escape(view)}/'
-        r'results/maestro/'
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    # Strip "/{lib}/{cell}/{view}/results/maestro[/{history}]" suffix
+    # to recover the scratch_root prefix.
+    suffix_re = re.compile(
+        rf'/{re.escape(lib)}/{re.escape(cell)}/{re.escape(view)}/'
+        r'results/maestro(?:/[^/]+)?/?$'
     )
-    matches = pattern.findall(xml_text)
-    if not matches:
-        return None
-
-    # Filter out the metadata prefix (== lib_path without the trailing /LIB).
-    metadata_prefix = None
-    if lib_path and lib_path.rstrip("/").endswith(f"/{lib}"):
-        metadata_prefix = lib_path.rstrip("/")[: -len(f"/{lib}")]
-    matches = [m for m in matches if m != metadata_prefix]
-    if not matches:
-        return None
-
-    from collections import Counter
-    most_common, _ = Counter(matches).most_common(1)[0]
-    return most_common
+    for psfdir_el in root.iter("psfdir"):
+        path = (psfdir_el.text or "").strip()
+        if not path:
+            continue
+        m = suffix_re.search(path)
+        if m:
+            return path[:m.start()]
+    return None
 
 
 def parse_parameters_from_sdb_xml(xml_text: str) -> list[dict]:
