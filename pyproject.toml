@@ -10,6 +10,7 @@ requires-python = ">=3.9"
 dependencies = [
     "python-dotenv>=1.0",
     "pydantic>=2.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -24,5 +25,5 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"virtuoso_bridge.resources" = [".env_template"]
+"virtuoso_bridge.resources" = [".env_template", "*.yaml"]
 "virtuoso_bridge.virtuoso.basic.resources" = ["*.il", "*.py"]

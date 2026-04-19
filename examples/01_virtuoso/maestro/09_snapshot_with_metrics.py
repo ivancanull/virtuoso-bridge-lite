@@ -4,9 +4,18 @@
     1. read_session_info(client)  →  identify the focused session
     2. snapshot_to_dir(client, info=..., ...)  →  dump artifacts to disk
 
-Writes ``{OUTPUT_ROOT}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/`` containing
-``snapshot.json`` + ``histories.json`` + ``latest_history.json`` +
-``maestro.sdb`` + ``raw_skill.json`` + ``probe_log.json``.
+Writes ``{OUTPUT_ROOT}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/`` with three
+"tracks" of state — each derived from a different source so they never
+overlap:
+
+  * ``state_from_skill.json``         — live SKILL session
+  * ``state_from_sdb.xml``            — filtered ``maestro.sdb``
+  * ``state_from_active_state.xml``   — filtered ``active.state``
+
+Plus raw copies (``maestro.sdb``, ``active.state``), run history
+metadata (``histories.json``, ``latest_history.json``) and a
+``<history_name>/`` subdir with the newest run's artifacts.  In debug
+mode also ``raw_skill.json`` + ``probe_log.json``.
 
 ``scratch_root`` is auto-detected from the downloaded ``maestro.sdb`` —
 no configuration needed.  Detection failures simply skip the scratch-

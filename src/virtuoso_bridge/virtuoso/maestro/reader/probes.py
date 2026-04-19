@@ -1,8 +1,12 @@
-"""Structured session-state readers: config / env / variables / outputs / corners / status.
+"""SKILL-only session-state readers: config / env / outputs / status.
 
 Each ``read_*`` returns a parsed Python dict/list.  Paired ``read_*_raw``
 entry points exist for ``config`` and ``env`` when the caller wants the
 uninterpreted SKILL output strings (debug / offline re-parse).
+
+Variables / corners / parameters / tests are *not* exposed here — they
+live in ``maestro.sdb`` and the library publishes that XML (raw +
+filtered via ``filter_sdb_xml``) rather than parsing it into dicts.
 """
 
 from __future__ import annotations
@@ -19,22 +23,6 @@ from ._parse_skill import (
     _tokenize_top_level,
     parse_skill_alist,
 )
-from ._parse_sdb import (
-    parse_corners_xml,
-    parse_variables_from_sdb_xml,
-)
-from .remote_io import read_remote_file
-
-
-def _read_sdb_xml(client: VirtuosoClient, sdb_path: str, *,
-                  local_path: str | None = None,
-                  reuse: bool = False) -> str:
-    """Fetch ``maestro.sdb`` as XML text.  Thin alias over read_remote_file
-    to keep the (sdb_path, local_sdb_path, reuse_local) triplet captured in
-    one call site shared by ``read_variables`` and ``read_corners``."""
-    return read_remote_file(
-        client, sdb_path, local_path=local_path, reuse_if_exists=reuse,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -48,9 +36,9 @@ def _read_config_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
     SKILL function / qualifier, so ``"maeGetAnalysis:ac"`` holds the raw
     alist for the ``ac`` analysis's options.
 
-    The redundant probes (outputs/corners/variables) are NOT done here —
-    those are owned by ``read_outputs`` / ``read_corners`` /
-    ``read_variables`` and not duplicated.
+    Outputs are owned by ``read_outputs`` and not duplicated here.
+    Variables / corners come from ``maestro.sdb`` (use ``filter_sdb_xml``
+    on the raw XML) — they are not parsed in the SKILL track.
     """
     raws: dict[str, str] = {}
     tests_raw = _q(client, "maeGetSetup",
@@ -155,34 +143,6 @@ def read_env(client: VirtuosoClient, session: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Variables
-# ---------------------------------------------------------------------------
-
-def read_variables(client: VirtuosoClient, sdb_path: str, *,
-                   local_sdb_path: str | None = None,
-                   reuse_local: bool = False) -> dict:
-    """Read design variables with values, split by scope.
-
-    Returns::
-
-        {"globals":  {var_name: value_info, ...},
-         "per_test": {test_name: {var_name: value_info, ...}, ...}}
-
-    Each ``value_info`` is a dict carrying the raw ``<value>`` text plus a
-    ``kind`` tag (``scalar`` / ``range_sweep`` / ``list_sweep``) and — for
-    sweeps — the parsed ``start``/``step``/``stop``/``points_count`` or
-    ``values`` fields.
-
-    ``sdb_path`` is required — the only reliable source for per-test
-    scope.  Callers should source it from
-    ``read_session_info(client)["sdb_path"]``.
-    """
-    return parse_variables_from_sdb_xml(
-        _read_sdb_xml(client, sdb_path,
-                      local_path=local_sdb_path, reuse=reuse_local))
-
-
-# ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 
@@ -218,29 +178,6 @@ def read_outputs(client: VirtuosoClient, session: str,
     )
     r = client.execute_skill(expr)
     return _parse_sev_outputs(r.output or "")
-
-
-# ---------------------------------------------------------------------------
-# Corners
-# ---------------------------------------------------------------------------
-
-def read_corners(client: VirtuosoClient, sdb_path: str, *,
-                 local_sdb_path: str | None = None,
-                 reuse_local: bool = False) -> dict[str, dict]:
-    """Download ``maestro.sdb`` and parse into per-corner PVT details.
-
-    The ``axl*`` API is flaky across Virtuoso versions so we go straight to
-    the on-disk XML.  Pass ``local_sdb_path`` to keep the downloaded XML
-    on disk (e.g. inside a snapshot directory); otherwise a temp file is
-    used and deleted.  Set ``reuse_local=True`` to skip the scp when
-    ``local_sdb_path`` already exists.
-
-    ``sdb_path`` is required — callers should source it from
-    ``read_session_info(client)["sdb_path"]``.
-    """
-    return parse_corners_xml(
-        _read_sdb_xml(client, sdb_path,
-                      local_path=local_sdb_path, reuse=reuse_local))
 
 
 # ---------------------------------------------------------------------------

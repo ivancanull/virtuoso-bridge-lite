@@ -25,20 +25,6 @@ def _extract_models(env_opts: dict) -> list[dict]:
     return result
 
 
-def _compact_corners(corners: dict) -> tuple[list, dict]:
-    """Return (enabled_names, all_corners_detail).
-
-    The detail dict keeps every corner (both enabled and disabled) and
-    every model inside each corner (same) — the caller should filter if
-    they want only what will run.  Deciding that up-here throws away the
-    distinction between ``configured`` and ``enabled``, which matters for
-    diagnosis.  ``corners_enabled`` gives the shortcut list for the common
-    case.
-    """
-    enabled = [k for k, v in corners.items() if v.get("enabled")]
-    return enabled, corners
-
-
 def _compact_session_info(info: dict) -> dict:
     return {
         "id": info.get("session") or "",

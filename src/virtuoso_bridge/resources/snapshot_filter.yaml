@@ -1,0 +1,95 @@
+# Snapshot filter — what to keep when stripping Cadence Maestro XML
+# files for snapshot output.  Acts as both *config* and *documentation*:
+# every Cadence element we know about is listed below.  Items in
+# `keep:` lists are kept in the filtered output.  Items in `drop:` lists
+# are documented for reference but excluded from the filter — uncomment
+# them under `keep:` if you want them included.
+#
+# Two files are filtered (raw copies kept under their Cadence names):
+#   * maestro.sdb     →  state_from_sdb.xml
+#   * active.state    →  state_from_active_state.xml
+#
+# This file is loaded once per snapshot.  Edit and re-run snapshot to
+# change the filter behavior — no code changes required.
+
+# ---------------------------------------------------------------------------
+# maestro.sdb
+# ---------------------------------------------------------------------------
+# Top level:  <setupdb> contains <active> and many <history> snapshots.
+# History snapshots are full duplicates of <active> at past run times —
+# ~90% of total file bytes.  They are never kept; only <active> matters.
+#
+# Inside <active>, these direct children are known to Cadence.  Most are
+# GUI prefs / view state with no setup intent.  The defaults below keep
+# the high-signal ~10%.
+
+maestro_sdb:
+  active_keep:
+    # The actual setup — what will run, with what knobs.
+    - currentmode            # run mode (Single Run / Sweeps and Corners / ...)
+    - jobcontrolmode         # LSCS / Local / ...
+    - corners                # PVT corners (with vars / temperature / models)
+    - tests                  # per-test setup (tooloptions / vars / outputs)
+    - vars                   # global design variables
+    - parameters             # per-instance CDF overrides
+    - specs                  # design spec targets / limits
+    - parametersets          # named parameter sweep sets
+    - overwritehistoryname   # next-run history name
+
+  active_drop:
+    # GUI / view-state — uncomment under active_keep to include.
+    # - plottingoptions       # waveform plot prefs
+    # - outputscustomcols     # output table column layout
+    # - runoptions            # GUI run-button prefs
+    # - extensions            # ADE Assembler extensions toggles
+    # - exploreroptions       # ADE Explorer toggles
+    # - checksasserts         # checks/asserts toggle state
+    # - incrementalsim        # incremental sim cache state
+    # - incrementalsimcache   # ditto
+    # - resultscustomcols     # results table column layout
+    # - waveforms             # last-shown waveform list
+    # - viewoptions           # tree view prefs
+
+# ---------------------------------------------------------------------------
+# active.state
+# ---------------------------------------------------------------------------
+# Top level:  <statedb> contains one or more <Test Name="..."> blocks.
+# Inside each <Test>, components carry per-test state.  Most components
+# exist on every test even when empty — they are placeholder containers
+# that the GUI populates when used.
+#
+# The defaults keep the ones that hold actual setup; the rest are listed
+# under components_drop with one-line descriptions for reference.
+
+active_state:
+  components_keep:
+    # Identity + design pointer
+    - adeInfo                 # designInfo + projectDir + description
+    # The full per-analysis sim setup — the bulk of useful state lives here.
+    - analyses                # <analysis Name="pss|pnoise|tran|ac|dc|noise|sp|stb">
+    # Per-test design knobs
+    - variables               # per-test vars (sdb has globals too)
+    - outputs                 # per-test output definitions
+    - modelSetup              # model file selection
+    - simulatorOptions        # spectre options overrides
+    - environmentOptions      # asiEnv key/value pairs
+    - rfstim                  # RF stimulus (PSS large-signal sources)
+
+  components_drop:
+    # Mostly empty in typical use — uncomment to include.
+    # - convergence            # convergence aids (gmin/homotopy/...)
+    # - cosimOptions           # AMS / mixed-signal cosim
+    # - devCheckingSetup       # device-checking / DC op-point check
+    # - emirOptions            # EMIR (electromigration / IR drop)
+    # - faultRules             # fault-injection rules
+    # - faults                 # specific fault definitions
+    # - graphicalStimuli       # GUI-drawn stimulus waveforms
+    # - mdlOptions             # MDL measurement language
+    # - mtsSetup               # multi-technology sim setup
+    # - opPoints               # operating-point save list
+    # - otherInfo              # misc GUI scratch
+    # - paramSetup             # parametric-analysis setup (sdb covers this)
+    # - relxOptions            # RelXpert / reliability sim
+    # - simulationFiles        # extra include / stim files
+    # - subckts                # subckt overrides
+    # - turboOptions           # turbo / parallel sim

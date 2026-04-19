@@ -1,34 +1,71 @@
-"""Parsers for ``maestro.sdb`` XML content.
+"""Cadence Maestro XML *filters* — strip raw ``maestro.sdb`` /
+``active.state`` down to high-signal subsets per a YAML keep-list.
 
-Pure functions — no I/O.  All take an already-downloaded XML string.
+Deliberately does **not** parse XML into Python dicts.  The library's
+position: XML files (raw + filtered) are the canonical setup format;
+consumers that need structured data should read the XML themselves.
+
+Pure functions — no I/O.  Both filters take / return XML strings.
 """
 
 from __future__ import annotations
 
-import re
 import xml.etree.ElementTree as ET
+from functools import lru_cache
+from pathlib import Path
+from typing import Iterable
+
+import yaml
 
 
-# Whitelist of <active> children that carry actual setup intent.
-# The remaining ~80% of sdb bytes are <history> snapshots (each one a
-# full duplicate of <active> at run time) plus GUI prefs.
-# See ``filter_sdb_xml`` for the full rationale.
-_ACTIVE_KEEP = frozenset({
-    "currentmode",            # run mode (Single Run / Sweeps and Corners / ...)
-    "jobcontrolmode",         # LSCS / Local / ...
-    "corners",                # PVT corners (with vars / temperature / models)
-    "tests",                  # per-test setup: tooloptions / vars / outputs
-    "vars",                   # global design variables
-    "parameters",             # per-instance CDF overrides
-    "specs",                  # design spec targets / limits (when present)
-    "parametersets",          # parameter sweep sets (when present)
-    "overwritehistoryname",   # next-run history name
-})
+_DEFAULT_FILTER_PATH = (
+    Path(__file__).resolve().parents[4] / "resources" / "snapshot_filter.yaml"
+)
+
+
+@lru_cache(maxsize=4)
+def _load_filter_config(path: str | None = None) -> dict:
+    """Read ``snapshot_filter.yaml`` (default location bundled in the
+    package) and return ``{"maestro_sdb": {...}, "active_state": {...}}``.
+
+    Cached: a snapshot pulls the same config many times.  Callers that
+    need a custom location can pass ``path`` — pass an absolute string
+    so the cache key is stable across calls.
+    """
+    p = Path(path) if path else _DEFAULT_FILTER_PATH
+    try:
+        return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def _keep_set(section: str, key: str, fallback: Iterable[str]) -> frozenset[str]:
+    """Pull a keep-list out of the YAML config, falling back to the hard-
+    coded list when the file is unreadable / missing the entry."""
+    cfg = _load_filter_config()
+    raw = (cfg.get(section) or {}).get(key)
+    if isinstance(raw, list) and raw:
+        return frozenset(str(x) for x in raw if x)
+    return frozenset(fallback)
+
+
+# Hard-coded fallbacks — used only when the YAML file is unreadable.
+# The YAML is the source of truth; these mirror its defaults so the
+# filter still works even on a broken install.
+_DEFAULT_SDB_ACTIVE_KEEP = (
+    "currentmode", "jobcontrolmode", "corners", "tests", "vars",
+    "parameters", "specs", "parametersets", "overwritehistoryname",
+)
+_DEFAULT_STATE_COMPONENT_KEEP = (
+    "adeInfo", "analyses", "variables", "outputs",
+    "modelSetup", "simulatorOptions", "environmentOptions", "rfstim",
+)
 
 
 def filter_sdb_xml(xml_text: str) -> str:
     """Return a stripped-down ``maestro.sdb`` XML — only the high-signal
-    parts of ``<active>``, ``<history>`` and GUI noise removed.
+    children of ``<active>`` survive; ``<history>`` and GUI prefs are
+    dropped.
 
     Profile of a typical sdb:
       ~90% bytes in ``<history>`` (one full ``<active>`` snapshot per
@@ -42,6 +79,9 @@ def filter_sdb_xml(xml_text: str) -> str:
     106 KB → ~10 KB (≥10× reduction) with no loss of "what's currently
     set up" information.
 
+    The whitelist is loaded from ``resources/snapshot_filter.yaml`` —
+    edit that file to change which ``<active>`` children survive.
+
     Pure function: takes / returns XML strings, no I/O.  Returns ``""``
     on parse error.
     """
@@ -50,318 +90,48 @@ def filter_sdb_xml(xml_text: str) -> str:
     except ET.ParseError:
         return ""
 
-    # Re-build a fresh setupdb skeleton with just the whitelisted bits.
+    keep = _keep_set("maestro_sdb", "active_keep", _DEFAULT_SDB_ACTIVE_KEEP)
+
     new_root = ET.Element("setupdb")
     for active in root.findall("active"):
         new_active = ET.SubElement(new_root, "active")
         for child in active:
-            if child.tag in _ACTIVE_KEEP:
+            if child.tag in keep:
                 new_active.append(child)
 
-    # Pretty-format the output with stable indentation; the source uses
-    # tabs but a shared 2-space indent reads fine and saves a few bytes.
     ET.indent(new_root, space="  ")
     return ET.tostring(new_root, encoding="unicode")
 
 
-def _detect_scratch_root_from_sdb(xml_text: str, lib: str, cell: str,
-                                  view: str) -> str | None:
-    """Auto-detect the simulation scratch prefix from ``maestro.sdb``.
+def filter_active_state_xml(xml_text: str) -> str:
+    """Return a stripped-down ``active.state`` XML — only the components
+    flagged as high-signal in ``snapshot_filter.yaml`` are kept.
 
-    Reads ``<historyentry>/<psfdir>`` elements directly — Cadence writes
-    the full scratch path there for completed runs, shaped::
+    ``active.state`` is per-test simulation setup.  Each ``<Test>`` block
+    holds ~22 ``<component>`` children, most empty placeholders.  The
+    important ones (analyses, variables, outputs, modelSetup, ...) carry
+    the actual configuration; the others are GUI scratch.
 
-        {scratch_root}/{lib}/{cell}/{view}/results/maestro/{history}
+    The whitelist is loaded from ``resources/snapshot_filter.yaml`` (key
+    ``active_state.components_keep``).
 
-    Many ``<psfdir>`` elements are empty (older entries get cleared, or
-    the cell was never simulated); the first non-empty one wins — they
-    all share the same install prefix.
-
-    Returns ``None`` when no ``<psfdir>`` is filled (cell never simulated
-    or sdb predates this Cadence convention).
-
-    Earlier versions used a regex over the whole sdb text and most-common
-    voting across all ``{prefix}/LIB/CELL/VIEW/results/maestro/...``
-    matches.  That voting was wrong — the metadata prefix
-    (``{lib_path_parent}/...``) outnumbers the scratch prefix in sdb
-    references, so the wrong one won.  Reading ``<psfdir>`` directly is
-    both simpler and authoritative.
-    """
-    if not (xml_text and lib and cell and view):
-        return None
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return None
-
-    # Strip "/{lib}/{cell}/{view}/results/maestro[/{history}]" suffix
-    # to recover the scratch_root prefix.
-    suffix_re = re.compile(
-        rf'/{re.escape(lib)}/{re.escape(cell)}/{re.escape(view)}/'
-        r'results/maestro(?:/[^/]+)?/?$'
-    )
-    for psfdir_el in root.iter("psfdir"):
-        path = (psfdir_el.text or "").strip()
-        if not path:
-            continue
-        m = suffix_re.search(path)
-        if m:
-            return path[:m.start()]
-    return None
-
-
-def parse_parameters_from_sdb_xml(xml_text: str) -> list[dict]:
-    """Extract global parameter overrides from ``maestro.sdb``.
-
-    Parameters are per-instance overrides attached to schematic locations
-    (as opposed to design ``vars`` which are global-scope).  Structure::
-
-        <active><parameters>
-          <location>LIB/CELL/VIEW/INSTANCE
-            <parameter enabled="1">NAME
-              <value>VAL</value>
-            </parameter>
-            ...
-          </location>
-          ...
-
-    Returns a list of dicts::
-
-        [{"location": "LIB/CELL/VIEW/INSTANCE",
-          "name": "fingers",
-          "value": "4",
-          "enabled": True}, ...]
-
-    ``value`` may contain Cadence expressions like
-    ``M4/fingers@LIB/CELL/VIEW`` for instance-tracking references.
-    Returns ``[]`` on empty / parse error.
+    Pure function: takes / returns XML strings, no I/O.  Returns ``""``
+    on parse error.
     """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
-        return []
+        return ""
 
-    result: list[dict] = []
-    for active in root.findall("active"):
-        params_elem = active.find("parameters")
-        if params_elem is None:
-            continue
-        for loc in params_elem.findall("location"):
-            loc_name = (loc.text or "").strip()
-            for p in loc.findall("parameter"):
-                name = (p.text or "").strip()
-                if not name:
-                    continue
-                result.append({
-                    "location": loc_name,
-                    "name": name,
-                    "value": p.findtext("value", "").strip(),
-                    "enabled": p.get("enabled", "0") == "1",
-                })
-    return result
+    keep = _keep_set("active_state", "components_keep",
+                     _DEFAULT_STATE_COMPONENT_KEEP)
 
+    new_root = ET.Element("statedb", root.attrib)
+    for test in root.findall("Test"):
+        new_test = ET.SubElement(new_root, "Test", test.attrib)
+        for comp in test.findall("component"):
+            if comp.get("Name") in keep:
+                new_test.append(comp)
 
-# Cadence sweep encoding.  A plain scalar is just the literal; a sweep
-# shows up as one of:
-#   "start:step:stop"        -> range sweep
-#   "(v1 v2 v3 ...)"         -> enumerated list
-_RANGE_SWEEP_RE = re.compile(
-    r"^\s*(-?[0-9.eE+]+)\s*:\s*(-?[0-9.eE+]+)\s*:\s*(-?[0-9.eE+]+)\s*$"
-)
-_LIST_SWEEP_RE = re.compile(r"^\s*\((.+)\)\s*$")
-
-
-def _classify_var_value(text: str, enabled: bool) -> dict:
-    """Tag a raw ``<value>`` string as scalar / range-sweep / list-sweep.
-
-    Keeps the original text verbatim under ``"raw"`` and records the
-    ``enabled`` flag from the ``<var enabled="...">`` attribute (defaults
-    to True when the attr is absent — that's Maestro's behavior).
-    Returns::
-
-        {"raw": "<original>",
-         "enabled": True|False,
-         "kind": "scalar" | "range_sweep" | "list_sweep",
-         # range_sweep only: start / step / stop / points_count
-         # list_sweep  only: values
-        }
-    """
-    raw = (text or "").strip()
-    out: dict = {"raw": raw, "enabled": enabled, "kind": "scalar"}
-    if not raw:
-        return out
-    m = _RANGE_SWEEP_RE.match(raw)
-    if m:
-        try:
-            start, step, stop = float(m.group(1)), float(m.group(2)), float(m.group(3))
-        except ValueError:
-            return out
-        if step <= 0:
-            return out
-        count = int(round((stop - start) / step)) + 1 if stop >= start else 0
-        out.update(kind="range_sweep", start=m.group(1), step=m.group(2),
-                   stop=m.group(3), points_count=count)
-        return out
-    m = _LIST_SWEEP_RE.match(raw)
-    if m:
-        parts = [p for p in re.split(r"[\s,]+", m.group(1).strip()) if p]
-        if parts:
-            out.update(kind="list_sweep", values=parts)
-            return out
-    return out
-
-
-def _var_enabled(v) -> bool:
-    """Read the ``enabled`` attribute — defaults to True when absent."""
-    attr = v.get("enabled")
-    if attr is None:
-        return True
-    return attr != "0"
-
-
-def parse_variables_from_sdb_xml(xml_text: str) -> dict:
-    """Extract variables from a ``maestro.sdb`` XML payload, keeping the
-    per-test vs. global scope separation the Maestro GUI exposes.
-
-    Returns::
-
-        {"globals":  {var_name: value_info, ...},
-         "per_test": {test_name: {var_name: value_info, ...}, ...}}
-
-    Each ``value_info`` is the dict produced by :func:`_classify_var_value`
-    — always carries the original ``raw`` text plus a ``kind`` tag
-    (``scalar`` / ``range_sweep`` / ``list_sweep``) and, for sweeps, the
-    parsed fields.
-
-    Pure function — does no I/O.  Returns ``{"globals": {}, "per_test":
-    {}}`` on parse error.
-    """
-    empty: dict = {"globals": {}, "per_test": {}}
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return empty
-
-    globals_out: dict[str, dict] = {}
-    per_test_out: dict[str, dict[str, dict]] = {}
-
-    for active in root.findall("active"):
-        # Per-test vars — <vars> is a direct child of <test> (sibling of
-        # <tooloptions>).  Typical for ADE Explorer (one test per cellview).
-        tests_elem = active.find("tests")
-        if tests_elem is not None:
-            for test in tests_elem.findall("test"):
-                test_name = (test.text or "").strip()
-                vars_e = test.find("vars")
-                if vars_e is None or not test_name:
-                    continue
-                scope = per_test_out.setdefault(test_name, {})
-                for v in vars_e.findall("var"):
-                    name = (v.text or "").strip()
-                    if name:
-                        scope[name] = _classify_var_value(
-                            v.findtext("value", ""), _var_enabled(v))
-
-        # Global vars — <vars> directly under <active>.  Typical for ADE Assembler.
-        vars_elem = active.find("vars")
-        if vars_elem is not None:
-            for v in vars_elem.findall("var"):
-                name = (v.text or "").strip()
-                if name:
-                    globals_out[name] = _classify_var_value(
-                        v.findtext("value", ""), _var_enabled(v))
-
-    return {"globals": globals_out, "per_test": per_test_out}
-
-
-def parse_tests_from_sdb_xml(xml_text: str) -> set[str]:
-    """Extract declared test names from a ``maestro.sdb`` XML payload.
-
-    Looks under ``<active><tests><test ...>NAME<...>`` — the NAME is direct
-    text content, not an attribute.  Returns an empty set on parse error.
-    """
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return set()
-
-    result: set[str] = set()
-    for active in root.findall("active"):
-        tests_elem = active.find("tests")
-        if tests_elem is None:
-            continue
-        for t in tests_elem.findall("test"):
-            name = (t.text or "").strip()
-            if name:
-                result.add(name)
-    return result
-
-
-def parse_corners_xml(xml_text: str) -> dict[str, dict]:
-    """Parse ``maestro.sdb`` XML content into structured per-corner dict.
-
-    Pure function — does no I/O.  Returns a dict of corner_name to ::
-
-        {"enabled": bool,
-         "temperature": list[str],
-         "vars": dict[str, str],
-         "parameters": dict[str, str],
-         "models": [{"enabled": bool, "file": str, "section": str,
-                     "block": str, "test": str}, ...]}
-    """
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return {}
-
-    corners_elem = None
-    for active in root.findall("active"):
-        c = active.find("corners")
-        if c is not None:
-            corners_elem = c
-            break
-    if corners_elem is None:
-        return {}
-
-    result: dict[str, dict] = {}
-    for corner in corners_elem.findall("corner"):
-        name = (corner.text or "").strip()
-        if not name:
-            continue
-        entry: dict = {
-            "enabled": corner.get("enabled", "0") == "1",
-            "temperature": [],
-            "vars": {},
-            "parameters": {},
-            "models": [],
-        }
-        vars_elem = corner.find("vars")
-        if vars_elem is not None:
-            for var in vars_elem.findall("var"):
-                vn = (var.text or "").strip()
-                vv = var.findtext("value", "").strip()
-                if vn == "temperature":
-                    entry["temperature"] = [
-                        t.strip() for t in vv.split(",") if t.strip()
-                    ]
-                elif vn:
-                    entry["vars"][vn] = vv
-        params_elem = corner.find("parameters")
-        if params_elem is not None:
-            for p in params_elem.findall("parameter"):
-                pn = (p.text or "").strip()
-                pv = p.findtext("value", "").strip()
-                if pn:
-                    entry["parameters"][pn] = pv
-        models_elem = corner.find("models")
-        if models_elem is not None:
-            for model in models_elem.findall("model"):
-                entry["models"].append({
-                    "enabled": model.get("enabled", "0") == "1",
-                    "file": model.findtext("modelfile", "").strip(),
-                    "section": model.findtext("modelsection", "").strip().strip('"'),
-                    "block": model.findtext("modelblock", "").strip(),
-                    "test": model.findtext("modeltest", "").strip(),
-                })
-        result[name] = entry
-    return result
+    ET.indent(new_root, space="  ")
+    return ET.tostring(new_root, encoding="unicode")

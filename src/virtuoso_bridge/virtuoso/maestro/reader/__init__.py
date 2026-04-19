@@ -4,13 +4,13 @@ Submodules:
 
 - ``_skill``       — low-level SKILL execution helpers
 - ``_parse_skill`` — SKILL output parsers (s-expr, alists, sev outputs)
-- ``_parse_sdb``   — ``maestro.sdb`` XML parsers
+- ``_parse_sdb``   — XML *filters* for ``maestro.sdb`` / ``active.state``
+                     (no XML→dict parsers — XML is the canonical format)
 - ``_parse_log``   — maestro history ``.log`` parser
 - ``_compact``     — snapshot reshape helpers
 - ``remote_io``    — scp-backed file transfer
 - ``session``      — focused-session discovery
-- ``probes``       — read_setup / config / env / variables / outputs /
-                     corners / status
+- ``probes``       — SKILL-only readers: config / env / outputs / status
 - ``runs``         — read_results, export_waveform, history enumeration,
                      latest-history log parsing
 - ``snapshot``     — ``snapshot`` + ``snapshot_to_dir`` aggregators
@@ -21,20 +21,12 @@ from submodules directly.
 
 from ._parse_log import parse_history_log
 from ._parse_skill import parse_skill_alist
-from ._parse_sdb import (
-    filter_sdb_xml,
-    parse_corners_xml,
-    parse_parameters_from_sdb_xml,
-    parse_tests_from_sdb_xml,
-    parse_variables_from_sdb_xml,
-)
+from ._parse_sdb import filter_active_state_xml, filter_sdb_xml
 from .probes import (
     read_config,
-    read_corners,
     read_env,
     read_outputs,
     read_status,
-    read_variables,
 )
 from .remote_io import read_remote_file
 from .runs import (
@@ -47,34 +39,27 @@ from .session import (
     detect_scratch_root,
     detect_session_for_focus,
     natural_sort_histories,
-    parse_local_maestro_sdb,
     read_session_info,
 )
 from .snapshot import snapshot, snapshot_to_dir
 
 
 __all__ = [
-    # parsers (pure functions)
+    # parsers (SKILL output / log only — no XML→dict parsers)
     "parse_skill_alist",
-    "parse_corners_xml",
-    "parse_parameters_from_sdb_xml",
-    "parse_tests_from_sdb_xml",
-    "parse_variables_from_sdb_xml",
     "parse_history_log",
+    # XML filters
     "filter_sdb_xml",
-    # session (live, needs client)
+    "filter_active_state_xml",
+    # session
     "read_session_info",
     "detect_session_for_focus",
     "detect_scratch_root",
-    # session (local, file-system only)
-    "parse_local_maestro_sdb",
     "natural_sort_histories",
-    # probes
+    # probes (SKILL-only)
     "read_config",
     "read_env",
-    "read_variables",
     "read_outputs",
-    "read_corners",
     "read_status",
     # runs
     "read_results",

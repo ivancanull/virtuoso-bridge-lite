@@ -14,26 +14,81 @@ from pathlib import Path
 from virtuoso_bridge import VirtuosoClient
 
 from ._compact import (
-    _compact_corners,
     _compact_session_info,
     _compact_sim_options,
     _compact_status,
     _extract_models,
 )
-from ._parse_sdb import filter_sdb_xml, parse_parameters_from_sdb_xml
-from .probes import (
-    _parse_config,
-    _parse_env,
-    _read_config_raw,
-    read_corners,
-    _read_env_raw,
-    read_outputs,
-    read_status,
-    read_variables,
+from ._parse_sdb import filter_active_state_xml, filter_sdb_xml
+from ._parse_skill import (
+    _parse_sev_outputs,
+    _parse_skill_str_list,
+    parse_skill_alist,
 )
-from .remote_io import read_remote_file
+from .bundle import _unwrap_errset, full_bundle
 from .runs import find_history_paths, read_latest_history, read_results
-from .session import detect_scratch_root, read_session_info
+from .session import (
+    _fetch_window_state,
+    _match_mae_title,
+    natural_sort_histories,
+    read_session_info,
+)
+
+
+def _build_info(client: VirtuosoClient) -> dict:
+    """Compose the info dict snapshot_to_dir + downstream callers expect.
+
+    1 SKILL call (``_fetch_window_state``) → focused window title +
+    ``davSession`` (focused session id) + sessions list + all window
+    titles.  Then Python regex on the title for lib/cell/view/mode.
+
+    sdb_path / results_base are deterministic strings derived from
+    ``ddGetObj({lib})~>readPath`` (which the bundle fetches separately,
+    so we synthesize stubs here and let the bundle fill in lib_path).
+    """
+    cur_name, cur_sess, all_names, _sessions = _fetch_window_state(client)
+    title_match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
+    lib  = title_match.get("lib", "")
+    cell = title_match.get("cell", "")
+    view = title_match.get("view", "")
+
+    return {
+        "session": cur_sess,
+        "application": title_match.get("application"),
+        "lib": lib, "cell": cell, "view": view,
+        "editable": title_match.get("editable"),
+        "unsaved_changes": title_match.get("unsaved_changes"),
+        "lib_path": "",          # filled in by snapshot() from bundle
+        "sdb_path": "",          # filled in by snapshot() once lib_path known
+        "results_base": "",      # ditto
+        "history_list": [],      # filled in by snapshot() from bundle hist_files
+        "test": "",              # filled in by snapshot() from bundle
+        "focused_window_title": cur_name or "",
+        "all_window_titles": all_names,
+    }
+
+
+def _build_status(status_raw: dict) -> dict:
+    """Re-shape full_bundle's status_raw slots into read_status's dict."""
+    if not status_raw:
+        return {}
+    run_plan = _parse_skill_str_list(_unwrap_errset(status_raw.get("run_plan_raw", "")))
+    curr_raw = _unwrap_errset(status_raw.get("current_history_raw", ""))
+    curr_hist = curr_raw.strip().strip('"') if curr_raw else None
+    def _msgs(key):
+        return [m for m in _parse_skill_str_list(
+                    _unwrap_errset(status_raw.get(key, ""))) if m.strip()]
+    return {
+        "run_mode":               status_raw.get("run_mode") or "",
+        "job_control_mode":       status_raw.get("job_control") or "",
+        "run_plan":               [p for p in run_plan if p.strip()],
+        "current_history_handle": curr_hist,
+        "messages": {
+            "error":   _msgs("errors_raw"),
+            "warning": _msgs("warnings_raw"),
+            "info":    _msgs("infos_raw"),
+        },
+    }
 
 
 @contextlib.contextmanager
@@ -88,12 +143,36 @@ def snapshot_to_dir(client: VirtuosoClient, *,
 
     Directory layout ``{output_root}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/``::
 
-        snapshot.json            structured setup
-        maestro.sdb              raw Cadence XML
-        histories.json           per-history run paths (if scratch detected)
-        latest_history.json      newest run's .log + spectre.out tail
-        raw_skill.json           every execute_skill call's input/output
-        probe_log.json           wall time + skill/scp counts + file sizes
+        maestro.sdb                       raw Cadence sdb (XML)
+        active.state                      raw Cadence per-test state (XML)
+        state_from_sdb.xml                YAML-filtered subset of maestro.sdb
+        state_from_active_state.xml       YAML-filtered subset of active.state
+        state_from_skill.json             SKILL-derived (session, status,
+                                          paths, scratch_root, analyses,
+                                          output_defs, sim env, models)
+        histories.json                    per-history run paths (when SKILL
+                                          ``asiGetAnalogRunDir`` succeeds)
+        latest_history.json               newest run's .log parse summary
+        <history_name>/                   newest run's raw input.scs /
+                                          spectre.out / .log
+        raw_skill.json                    every execute_skill call's I/O
+                                          (debug only — include_raw_skill)
+        probe_log.json                    wall time + skill/scp counts +
+                                          file sizes (debug only —
+                                          include_metrics)
+
+    Three "tracks" of state, deliberately split:
+
+    1. ``state_from_skill.json`` — what the live ADE session reports.
+    2. ``state_from_sdb.xml`` — what's persisted in ``maestro.sdb``
+       (corners / vars / parameters / tests / specs / parametersets).
+    3. ``state_from_active_state.xml`` — what's persisted in
+       ``active.state`` (per-analysis options for pss / pnoise / tran /
+       ac / dc / noise / sp / stb).
+
+    The filtered XMLs use ``resources/snapshot_filter.yaml`` as the
+    keep-list source of truth.  SKILL track and XML tracks never
+    duplicate each other.
 
     Returns the snapshot directory ``Path``.
     """
@@ -167,19 +246,61 @@ def snapshot_to_dir(client: VirtuosoClient, *,
         snap_dir.mkdir(parents=True, exist_ok=True)
         local_sdb = snap_dir / "maestro.sdb"
 
-        # snapshot() now handles scratch_root auto-detection itself; just
-        # pass the caller's value through (None = detect, "" = skip).
+        # snapshot() is now SKILL-only (no sdb scp side-effect).  Pull
+        # the caller's scratch_root through unchanged (None = detect, ""
+        # = skip).
         snap = snapshot(
             client,
             include_output_values=include_output_values,
             include_latest_history=include_latest_history,
-            sdb_cache_path=str(local_sdb),
             scratch_root=scratch_root,
         )
-        # Back-compat alias: old field name from when detection lived here.
-        snap["scratch_root_detected"] = snap.get("scratch_root")
 
-        # Split the bulky / auxiliary sections into sibling files.
+        # --- XML snapshots (the "golden" setup data) -----------------------
+        # Two raw artifacts to scp from the OA cellview directory:
+        # ``maestro.sdb`` (corners / vars / parameters / tests / specs)
+        # and ``active.state`` (per-analysis options).  Each is then
+        # YAML-filtered for the high-signal subset.  Both scp's are
+        # best-effort — a missing file shouldn't break the snapshot.
+        sdb_remote = info.get("sdb_path") or ""
+        if sdb_remote:
+            try:
+                client.download_file(sdb_remote, str(local_sdb))
+            except Exception:
+                pass
+
+        if local_sdb.exists():
+            try:
+                sdb_xml = local_sdb.read_text(encoding="utf-8", errors="replace")
+                filt = filter_sdb_xml(sdb_xml)
+                if filt:
+                    (snap_dir / "state_from_sdb.xml").write_text(
+                        filt, encoding="utf-8")
+            except OSError:
+                pass
+
+        sdb_remote = info.get("sdb_path") or ""
+        if sdb_remote:
+            # active.state is a sibling of maestro.sdb in the OA view dir.
+            state_remote = sdb_remote.rsplit("/", 1)[0] + "/active.state"
+            local_state = snap_dir / "active.state"
+            try:
+                client.download_file(state_remote, str(local_state))
+            except Exception:
+                # Cell never opened in ADE? File simply absent — non-fatal.
+                pass
+            if local_state.exists():
+                try:
+                    state_xml = local_state.read_text(
+                        encoding="utf-8", errors="replace")
+                    filt_state = filter_active_state_xml(state_xml)
+                    if filt_state:
+                        (snap_dir / "state_from_active_state.xml").write_text(
+                            filt_state, encoding="utf-8")
+                except OSError:
+                    pass
+
+        # --- histories.json (SKILL: directory enumeration) -----------------
         histories = snap.pop("histories", None)
         if histories is not None:
             (snap_dir / "histories.json").write_text(
@@ -187,32 +308,18 @@ def snapshot_to_dir(client: VirtuosoClient, *,
                            ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-            snap["histories_file"] = "histories.json"
-            snap["histories_summary"] = {
-                "count": len(histories),
-                "with_runs": sum(1 for h in histories if h["runs"]),
-                "total_runs": sum(len(h["runs"]) for h in histories),
-            }
 
+        # --- latest_history.json + <history_name>/ subfolder ---------------
         latest = snap.pop("latest_history", None)
         if latest:
             (snap_dir / "latest_history.json").write_text(
                 json.dumps(latest, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-            snap["latest_history_file"] = "latest_history.json"
-            snap["latest_history_summary"] = {
-                "name":   latest.get("history_name"),
-                "status": latest.get("status"),
-                "duration_seconds": (latest.get("timing") or {}).get("duration_seconds"),
-                "errors_count":     latest.get("errors_count"),
-                "points_completed": latest.get("points_completed"),
-            }
 
             # Latest run artifacts: pull raw .log + spectre.out + input.scs
             # into a `<history_name>/` subfolder so the user can inspect
-            # them post-hoc.  Use original filenames where they're
-            # informative; the subfolder name carries the history.
+            # them post-hoc.  Each scp is best-effort.
             history_name = latest.get("history_name") or ""
             run_paths = None
             if histories and history_name:
@@ -225,41 +332,34 @@ def snapshot_to_dir(client: VirtuosoClient, *,
                 hist_dir = snap_dir / history_name
                 hist_dir.mkdir(parents=True, exist_ok=True)
 
-                # Each scp is best-effort: a missing file shouldn't break
-                # the whole snapshot.
                 log_remote = (latest.get("metadata_files") or {}).get("log") or ""
                 if log_remote:
                     try:
-                        client.download_file(log_remote, str(hist_dir / f"{history_name}.log"))
+                        client.download_file(
+                            log_remote, str(hist_dir / f"{history_name}.log"))
                     except Exception:
                         pass
 
                 spectre_remote = (run_paths.get("psf") or {}).get("spectre_out") or ""
                 if spectre_remote:
                     try:
-                        client.download_file(spectre_remote, str(hist_dir / "spectre.out"))
+                        client.download_file(
+                            spectre_remote, str(hist_dir / "spectre.out"))
                     except Exception:
                         pass
 
                 netlist_remote = (run_paths.get("netlist") or {}).get("input_scs") or ""
                 if netlist_remote:
                     try:
-                        client.download_file(netlist_remote, str(hist_dir / "input.scs"))
+                        client.download_file(
+                            netlist_remote, str(hist_dir / "input.scs"))
                     except Exception:
                         pass
 
-        # Filtered sdb (high-signal subset, ~10× smaller than maestro.sdb).
-        # Useful when feeding state to LLMs / when you want a compact view.
-        if local_sdb.exists():
-            try:
-                xml = local_sdb.read_text(encoding="utf-8", errors="replace")
-                filt = filter_sdb_xml(xml)
-                if filt:
-                    (snap_dir / "maestro.filtered.sdb").write_text(filt, encoding="utf-8")
-            except OSError:
-                pass
-
-        (snap_dir / "snapshot.json").write_text(
+        # --- state_from_skill.json (SKILL-derived only) --------------------
+        # snapshot() already produces a SKILL-only dict; setup data lives
+        # in state_from_sdb.xml / state_from_active_state.xml.
+        (snap_dir / "state_from_skill.json").write_text(
             json.dumps(snap, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
         )
@@ -351,107 +451,94 @@ def snapshot(client: VirtuosoClient, *,
     - ``include_raw=True`` — attach ``raw_probes`` with the uninterpreted
       SKILL output strings, for debug / audit / offline re-parse.
       Defaults off to keep the snapshot lean.
-    - ``sdb_cache_path`` — persist the downloaded ``maestro.sdb`` on
-      disk (shared with corner / variable parsing).  If omitted, a
-      single temp file is created and shared across all sub-readers so
-      ``maestro.sdb`` is fetched exactly once per snapshot.
+    - ``sdb_cache_path`` — accepted for backwards compat; no longer used
+      now that the SKILL track requires no sdb scp.
+
+    Internally: 2 SKILL round-trips total for the SKILL track —
+    ``_fetch_window_state`` + ``full_bundle``.  Plus per-history
+    enumeration when ``scratch_root`` is set + ``include_latest_history``.
     """
-    with _sdb_cache(sdb_cache_path) as cache_path:
-        info = read_session_info(client, sdb_cache_path=cache_path)
-        sess = info.get("session") or ""
+    del sdb_cache_path  # accepted for back-compat; no longer used
+    info = _build_info(client)
+    sess = info.get("session") or ""
+    lib  = info.get("lib") or ""
+    cell = info.get("cell") or ""
+    view = info.get("view") or "maestro"
 
-        # Auto-detect scratch_root (SKILL → sdb-regex fallback) when the
-        # caller didn't pin it.  ``""`` is a "skip detection" signal so a
-        # caller can deliberately omit histories enrichment.  The sdb is
-        # already on disk from read_session_info, so detection is cheap.
-        if scratch_root is None:
-            scratch_root = detect_scratch_root(
-                client, info, local_sdb_path=cache_path)
+    bundle = full_bundle(client, sess=sess, lib=lib, cell=cell, view=view) if sess else {}
 
-        cfg_raw = _read_config_raw(client, sess) if sess else {}
-        env_raw = _read_env_raw(client, sess) if sess else {}
-        cfg = _parse_config(cfg_raw)
-        env = _parse_env(env_raw)
+    # Now that bundle has lib_path, fill in info's path-derived fields.
+    # sdb_name: Cadence convention is ``{view}.sdb`` (maestro.sdb /
+    # maestro_MC.sdb / ...).  Cells with non-canonical names are rare;
+    # this avoids an extra SKILL ``getDirFiles`` call.
+    lib_path = bundle.get("lib_path") or ""
+    info["lib_path"]     = lib_path
+    info["sdb_path"]     = (f"{lib_path}/{cell}/{view}/{view}.sdb"
+                            if lib_path and cell and view else "")
+    info["results_base"] = (f"{lib_path}/{cell}/{view}/results/maestro"
+                            if lib_path and cell and view else "")
 
-        sdb = info.get("sdb_path") or ""
-        variables = read_variables(
-            client, sdb, local_sdb_path=cache_path, reuse_local=True,
-        ) if sdb else {"globals": {}, "per_test": {}}
+    # scratch_root: caller wins; otherwise take whatever bundle resolved
+    # (which is just SKILL-derived asiGetAnalogRunDir).  "" = skip enrichment.
+    if scratch_root is None:
+        scratch_root = bundle.get("scratch_root") or None
 
-        outputs = read_outputs(client, sess) if sess else []
+    # Slot bundle output through existing parsers — these are pure
+    # functions; we only changed how the raw text was fetched.
+    analyses = {ana: parse_skill_alist(raw)
+                for ana, raw in (bundle.get("analyses_raw") or {}).items()}
+    env_opts = parse_skill_alist(bundle.get("env_raw", {}).get("maeGetEnvOption", ""))
+    sim_opts = parse_skill_alist(bundle.get("env_raw", {}).get("maeGetSimOption", ""))
+    outputs  = _parse_sev_outputs(bundle.get("outputs_raw", ""))
+    status   = _build_status(bundle.get("status_raw") or {})
 
-        corners = read_corners(
-            client, sdb, local_sdb_path=cache_path, reuse_local=True,
-        ) if sdb else {}
+    # Synthesize info-shaped fields snapshot_to_dir downstream depends on.
+    info["test"] = bundle.get("test") or ""
+    info["history_list"] = natural_sort_histories(bundle.get("hist_files") or [])
 
-        parameters: list[dict] = []
-        if sdb:
-            parameters = parse_parameters_from_sdb_xml(
-                read_remote_file(client, sdb,
-                                 local_path=cache_path, reuse_if_exists=True))
+    # SKILL-only: variables / corners / parameters live in maestro.sdb;
+    # consumers should read the raw / filtered XML directly.
+    out: dict = {
+        "location": "/".join(p for p in (lib, cell, view) if p),
+        "session":  _compact_session_info(info),
+        "design":   bundle.get("design"),
 
-        status = read_status(client, sess) if sess else {}
-        corners_enabled, corners_detail = _compact_corners(corners)
-        env_opts = env.get("env_options") or {}
+        "analyses":     analyses,
+        "output_defs":  outputs,
 
-        out: dict = {
-            # --- Identity ----------------------------------------------
-            "location": "/".join(
-                p for p in (info.get("lib"), info.get("cell"), info.get("view")) if p
-            ),
-            "session": _compact_session_info(info),
+        "models":       _extract_models(env_opts),
+        "simulator":    env_opts.get("simExecName") or "",
+        "control_mode": env_opts.get("controlMode") or "",
+        "sim_options":  _compact_sim_options(sim_opts),
 
-            # --- What will run -----------------------------------------
-            "analyses": cfg.get("analyses") or {},
+        "status": _compact_status(status),
 
-            # --- Design knobs ------------------------------------------
-            "variables": variables,
-            "parameters": parameters,
+        "paths": {
+            "lib":          info.get("lib_path") or "",
+            "sdb":          info.get("sdb_path") or "",
+            "results_base": info.get("results_base") or "",
+        },
 
-            # --- Measurements ------------------------------------------
-            # "output_defs" = Output *definitions* (from maeGetTestOutputs).
-            # "output_values" (below, optional) = the scalars those defs
-            # evaluate to after a run (from maeGetOutputValue).
-            "output_defs": outputs,
+        "scratch_root": scratch_root or None,
+    }
 
-            # --- Process / corners -------------------------------------
-            "corners_enabled": corners_enabled,
-            "corners_detail":  corners_detail,
-            "models":          _extract_models(env_opts),
-
-            # --- Simulator settings ------------------------------------
-            "simulator":    env_opts.get("simExecName") or "",
-            "control_mode": env_opts.get("controlMode") or "",
-            "sim_options":  _compact_sim_options(env.get("sim_options") or {}),
-
-            # --- Runtime -----------------------------------------------
-            "status": _compact_status(status),
-
-            # --- Paths (absolute, on the remote) -----------------------
-            "paths": {
-                "lib":          info.get("lib_path") or "",
-                "sdb":          sdb,
-                "results_base": info.get("results_base") or "",
-            },
-
-            # --- Scratch (auto-detected unless caller pinned) ----------
-            # None = detection failed / no scratch ever recorded.
-            "scratch_root": scratch_root or None,
+    if include_raw:
+        out["raw_probes"] = {
+            "env_option": bundle.get("env_raw", {}).get("maeGetEnvOption", ""),
+            "sim_option": bundle.get("env_raw", {}).get("maeGetSimOption", ""),
+            "outputs":    bundle.get("outputs_raw", ""),
+            "analyses":   bundle.get("analyses_raw") or {},
         }
-
-        if include_raw:
-            out["raw_probes"] = {"config": cfg_raw, "env": env_raw}
-        if include_output_values:
-            out["output_values"] = read_results(
-                client, sess,
-                lib=info.get("lib", ""), cell=info.get("cell", ""))
-        if scratch_root:
-            out["histories"] = find_history_paths(
-                client, info, scratch_root=scratch_root,
-            )
-        if include_latest_history:
-            out["latest_history"] = read_latest_history(
-                client, info, scratch_root=scratch_root,
-                log_cache_path=log_cache_path,
-            )
-        return out
+    if include_output_values:
+        out["output_values"] = read_results(
+            client, sess, lib=lib, cell=cell)
+    if scratch_root:
+        out["histories"] = find_history_paths(
+            client, info, scratch_root=scratch_root,
+        )
+    if include_latest_history:
+        out["latest_history"] = read_latest_history(
+            client, info, scratch_root=scratch_root,
+            log_cache_path=log_cache_path,
+        )
+    return out

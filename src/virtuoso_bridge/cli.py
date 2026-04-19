@@ -583,10 +583,19 @@ _SNAPSHOT_OPTS: dict = {
 
 
 def cli_windows() -> int:
-    """List all open Virtuoso windows."""
+    """List all open Virtuoso windows.
+
+    Annotates the focused line with its bound maestro session (when
+    the focused window is an ADE Assembler) and lists all open
+    sessions in a footer.  All info comes from a single SKILL round-
+    trip — no scp.
+    """
     _load_cli_env()
     import sys
     from virtuoso_bridge import VirtuosoClient
+    from virtuoso_bridge.virtuoso.maestro.reader._parse_skill import (
+        _parse_skill_str_list,
+    )
 
     client = VirtuosoClient.from_env()
     windows = client.list_windows()
@@ -594,17 +603,30 @@ def cli_windows() -> int:
         print("No windows found.")
         return 1
 
-    # Resolve SKILL-side focused window so we can highlight it in the
-    # listing.  Independent of OS window manager focus.
+    # One SKILL call → focused window number + focused window's bound
+    # maestro session id (via davSession attribute) + all open sessions.
     focused_num = ""
+    focused_session = ""
+    sessions: list[str] = []
     try:
         r = client.execute_skill(
-            "let((w) w = hiGetCurrentWindow() "
-            "if(w sprintf(nil \"%d\" w~>windowNum) \"\"))"
+            "let((w) w = hiGetCurrentWindow() list("
+            "if(w sprintf(nil \"%d\" w~>windowNum) \"\")"
+            " if(w w->davSession \"\")"
+            " maeGetSessions()))"
         )
-        focused_num = (r.output or "").strip().strip('"')
+        out = (r.output or "").strip()
+        if out.startswith("(") and out.endswith(")"):
+            inner = out[1:-1].strip()
+            # First two tokens are quoted strings; the rest is the
+            # ``maeGetSessions()`` list literal.
+            m = re.match(r'\s*"([^"]*)"\s*"([^"]*)"\s*(.*)', inner, re.DOTALL)
+            if m:
+                focused_num = m.group(1).strip()
+                focused_session = m.group(2).strip()
+                sessions = _parse_skill_str_list(m.group(3).strip())
     except Exception:
-        focused_num = ""
+        pass
 
     use_color = sys.stdout.isatty()
     BOLD = "\033[1m" if use_color else ""
@@ -614,13 +636,18 @@ def cli_windows() -> int:
         (w["name"] for w in windows if w["num"] == focused_num), "")
     if focused_num:
         label = f"{focused_num}  {focused_name}" if focused_name else focused_num
-        print(f"Focused: {BOLD}{label}{RESET}\n")
+        suffix = f"  [{focused_session}]" if focused_session else ""
+        print(f"Focused: {BOLD}{label}{RESET}{suffix}\n")
 
     for w in windows:
         is_focused = w["num"] == focused_num
         marker = "*" if is_focused else " "
         name = f"{BOLD}{w['name']}{RESET}" if is_focused else w["name"]
         print(f"{marker} {w['num']:>4}  {name}")
+
+    if sessions:
+        print()
+        print(f"Maestro sessions ({len(sessions)}): {', '.join(sessions)}")
     return 0
 
 
@@ -631,8 +658,12 @@ def cli_snapshot() -> int:
       default     : brief one-screen summary to stdout (fast — skips
                      latest-history scp, no disk writes).
       ``-o ROOT`` : full snapshot_to_dir under ROOT (slow but complete:
-                     snapshot.json + histories.json + latest_history.json
-                     + raw_skill.json + probe_log.json + maestro.sdb).
+                     maestro.sdb + active.state (raw) +
+                     state_from_sdb.xml + state_from_active_state.xml
+                     (filtered) + state_from_skill.json (SKILL track) +
+                     histories.json + latest_history.json + <history>/
+                     run artifacts; with ``--debug`` also raw_skill.json
+                     + probe_log.json).
       ``--json``  : full in-memory snapshot dict as JSON to stdout.
     """
     _load_cli_env()
@@ -690,120 +721,79 @@ def cli_snapshot() -> int:
         print(f"[{kind}] {title}")
         return 0
 
-    # Maestro brief: skip the spectre.out scp (still slow), but DO pull
-    # find_history_paths to compute the .log + spectre.out paths so the
-    # user knows where to look.  ~1 sdb scp + ~3 SKILL round-trips.
-    snap_dict = poly_snapshot(client, include_latest_history=False)
-    _print_maestro_brief(snap_dict["data"])
+    # Maestro brief: 2 SKILL round-trips total — _fetch_window_state
+    # for focused title/davSession, then brief_bundle for everything
+    # else.  No scp.  ~150ms wall.
+    from virtuoso_bridge.virtuoso.maestro.reader.session import (
+        _fetch_window_state, _match_mae_title,
+    )
+    from virtuoso_bridge.virtuoso.maestro.reader.bundle import brief_bundle
+
+    cur_name, cur_sess, all_names, _sessions = _fetch_window_state(client)
+    title_match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
+    lib  = title_match.get("lib", "")
+    cell = title_match.get("cell", "")
+    view = title_match.get("view", "") or "maestro"
+
+    bundle = brief_bundle(client, sess=cur_sess, lib=lib, cell=cell, view=view)
+    _print_maestro_brief(
+        title_match=title_match, sess=cur_sess, bundle=bundle,
+        lib=lib, cell=cell, view=view,
+    )
     return 0
 
 
-def _format_var_value(v: dict) -> str:
-    """Compact ``key=value`` rendering of one sdb variable value_info."""
-    raw = v.get("raw", "")
-    kind = v.get("kind", "scalar")
-    disabled = "" if v.get("enabled", True) else "(disabled)"
-    if kind == "range_sweep":
-        return f"{raw}[sweep,{v.get('points_count','?')}pts]{disabled}"
-    if kind == "list_sweep":
-        return f"{raw}[sweep,{len(v.get('values', []))}pts]{disabled}"
-    return f"{raw}{disabled}"
+def _print_maestro_brief(*, title_match: dict, sess: str, bundle: dict,
+                         lib: str, cell: str, view: str) -> None:
+    """One-screen summary of a focused maestro session — pure SKILL.
 
+    Variables, corners, parameters and per-test setup live in
+    ``maestro.sdb`` / ``active.state``; for those, run
+    ``virtuoso-bridge snapshot -o ROOT`` and inspect the filtered XML
+    files (``state_from_sdb.xml`` / ``state_from_active_state.xml``).
+    """
+    from virtuoso_bridge.virtuoso.maestro.reader.session import natural_sort_histories
 
-def _format_corner(name: str, c: dict) -> str:
-    """Compact one-liner for an enabled corner."""
-    temp = c.get("temperature") or []
-    cvars = c.get("vars") or {}
-    models = [m for m in (c.get("models") or []) if m.get("enabled")]
-    bits: list[str] = []
-    if temp:
-        bits.append(f"T={'/'.join(temp)}")
-    if cvars:
-        bits.append(",".join(f"{k}={v}" for k, v in cvars.items()))
-    if models:
-        bits.append(f"{len(models)}models")
-    return f"{name}({', '.join(bits)})" if bits else name
+    app   = title_match.get("application") or "?"
+    mode  = "Editing" if title_match.get("editable") else (
+            "Reading" if title_match.get("editable") is False else "")
+    unsaved = title_match.get("unsaved_changes")
+    mode_suffix = f" ({mode}" + (", unsaved)" if unsaved else ")") if mode else ""
+    location = "/".join(p for p in (lib, cell, view) if p)
 
+    print(f"[{app}] {location}{mode_suffix}")
+    print(f"[session] {sess}  test={bundle.get('test','')}")
 
-def _print_maestro_brief(d: dict) -> None:
-    sess      = d.get("session") or {}
-    vars_     = d.get("variables") or {}
-    g         = vars_.get("globals") or {}
-    pt        = vars_.get("per_test") or {}
-    enabled   = d.get("corners_enabled") or []
-    cdetail   = d.get("corners_detail") or {}
-    odefs     = d.get("output_defs") or []
-    computed  = sum(1 for o in odefs if o.get("kind") == "computed")
-    analyses  = list((d.get("analyses") or {}).keys())
-    paths     = d.get("paths") or {}
-    histories = d.get("histories") or []
+    design = bundle.get("design") or {}
+    if design.get("lib"):
+        print(f"[design] {design['lib']}/{design['cell']}/{design['view']}")
 
-    print(f"focused : [{sess.get('app','?')}] {d.get('location','')}  "
-          f"({sess.get('mode','?')}{', unsaved' if sess.get('unsaved') else ''})")
-    print(f"session : {sess.get('id','')}  test={sess.get('test','')}")
-    run_mode = (d.get("status") or {}).get("run_mode") or ""
-    if run_mode:
-        print(f"run mode: {run_mode}")
+    if bundle.get("run_mode"):
+        print(f"[run mode] {bundle['run_mode']}")
+
+    analyses = bundle.get("analyses") or []
     if analyses:
-        print(f"analyses: {', '.join(analyses)}")
+        print(f"[analyses] {', '.join(analyses)}")
 
-    # --- Variables (one line per scope, name=value comma-separated) ---
-    if g:
-        items = ", ".join(f"{n}={_format_var_value(v)}" for n, v in g.items())
-        print(f"vars(global): {items}")
-    for test_name, vmap in pt.items():
-        if not vmap:
-            continue
-        items = ", ".join(f"{n}={_format_var_value(v)}" for n, v in vmap.items())
-        print(f"vars({test_name}): {items}")
-    if not g and not any(pt.values()):
-        print("vars    : (none)")
+    n_outputs = bundle.get("outputs_count") or 0
+    if n_outputs:
+        print(f"[outputs] {n_outputs}")
 
-    # --- Corners (one line, name(detail) comma-separated) ---
-    # Annotate when run_mode won't actually execute the enabled corners
-    # ("Single Run, Sweeps and Corners" -> runs them; "Single Point" /
-    # "Single Run" / similar -> they're checked in the GUI but ignored).
-    will_run_corners = "Corner" in run_mode  # heuristic, matches Cadence labels
-    suffix = "" if will_run_corners else "  [NOT in current run mode]"
-    if enabled:
-        items = ", ".join(_format_corner(n, cdetail.get(n) or {}) for n in enabled)
-        print(f"corners : {items}{suffix}")
-    else:
-        print(f"corners : (none enabled){suffix if run_mode else ''}")
+    # --- Latest run paths (deterministic — derived from lib_path /
+    # scratch_root / latest history name).  No extra SKILL needed.
+    lib_path = bundle.get("lib_path") or ""
+    scratch  = bundle.get("scratch_root") or ""
+    test     = bundle.get("test") or ""
+    histories = natural_sort_histories(bundle.get("hist_files") or [])
+    latest = histories[-1] if histories else ""
 
-    # --- Outputs (one per line — names + exprs are too long for one line) ---
-    if odefs:
-        print(f"outputs ({len(odefs)}, {computed} computed):")
-        for o in odefs:
-            kind_o = o.get("kind", "?")
-            name = o.get("name") or o.get("signal") or "unnamed"
-            if kind_o == "computed":
-                expr = o.get("expr", "")
-                if len(expr) > 80:
-                    expr = expr[:77] + "..."
-                print(f"  [{name}] {expr}")
-            else:
-                t = o.get("type") or ""
-                print(f"  [{name}] save-only ({t})")
-
-    # --- Latest run paths (for grep / inspection) ---
-    # The .log lives in the OA library at a deterministic path; the
-    # spectre.out lives in scratch and needs find_history_paths data.
-    results_base = paths.get("results_base") or ""
-    latest_hist = ""
-    latest_spectre = ""
-    if histories:
-        non_empty = [h for h in histories if h.get("runs")]
-        latest_entry = (non_empty or histories)[-1]
-        latest_hist = latest_entry.get("name", "")
-        runs = latest_entry.get("runs") or []
-        if runs:
-            latest_spectre = (runs[0].get("psf") or {}).get("spectre_out", "")
-
-    if latest_hist and results_base:
-        print(f"[.log] {results_base}/{latest_hist}.log")
-    if latest_spectre:
-        print(f"[.out] {latest_spectre}")
+    results_base = f"{lib_path}/{cell}/{view}/results/maestro" if lib_path else ""
+    if latest and results_base:
+        print(f"[.log] {results_base}/{latest}.log")
+    if latest and scratch and test:
+        scr = f"{scratch}/{lib}/{cell}/{view}/results/maestro/{latest}/1/{test}"
+        print(f"[.scs] {scr}/netlist/input.scs")
+        print(f"[.out] {scr}/psf/spectre.out")
 
 
 def cli_screenshot() -> int:

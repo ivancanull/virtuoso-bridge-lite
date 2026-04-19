@@ -5,15 +5,11 @@ Live entry points (need a client):
 - ``read_session_info`` — full info dict for the currently focused window.
 - ``detect_session_for_focus`` — map focused cellview to one of several
   open maestro sessions by matching test-name sets.
-- ``detect_scratch_root`` — auto-detect the simulation scratch prefix.
-  Tries SKILL ``asiGetAnalogRunDir`` first (works on a fresh / un-simulated
-  session), falls back to scanning the downloaded sdb for path patterns.
+- ``detect_scratch_root`` — auto-detect the simulation scratch prefix
+  via SKILL ``asiGetAnalogRunDir``.
 
-Local entry points (no client, just a path):
+Helpers:
 
-- ``parse_local_maestro_sdb`` — pure-local counterpart of
-  ``read_session_info``.  Reads a local ``maestro.sdb`` (already pulled
-  back via scp) plus its adjacent ``results/maestro/`` directory.
 - ``natural_sort_histories`` — sort a directory listing into a history-name
   list (Interactive.N / sweep_set.N / closeloop_PVT_postsim / ...).
 """
@@ -21,18 +17,11 @@ Local entry points (no client, just a path):
 from __future__ import annotations
 
 import re
-from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from virtuoso_bridge import VirtuosoClient
 
 from ._parse_skill import _parse_skill_str_list, _tokenize_top_level
-from ._parse_sdb import (
-    _detect_scratch_root_from_sdb,
-    parse_corners_xml,
-    parse_parameters_from_sdb_xml,
-    parse_tests_from_sdb_xml,
-    parse_variables_from_sdb_xml,
-)
 from .remote_io import read_remote_file
 
 
@@ -119,48 +108,37 @@ def _detect_scratch_root_via_skill(client: VirtuosoClient, *,
 
 def detect_scratch_root(client: VirtuosoClient, info: dict, *,
                          local_sdb_path: str | None = None) -> str | None:
-    """Auto-detect the simulation scratch prefix — SKILL first, sdb fallback.
+    """Auto-detect the simulation scratch prefix via SKILL.
 
-    Tries :func:`asiGetAnalogRunDir` (works on a fresh / un-simulated
-    session) first.  On failure, scans the downloaded ``maestro.sdb`` for
-    matching ``{prefix}/{lib}/{cell}/{view}/results/maestro/`` patterns.
+    Calls :func:`asiGetAnalogRunDir` on the focused session and strips
+    the ``{lib}/{cell}/{view}/results/maestro/...`` suffix to recover
+    the install-specific prefix (e.g. ``/server_local_ssd/USER/simulation``).
+
+    Returns ``None`` when SKILL doesn't yield a usable run dir — the
+    snapshot's "live" track is intentionally SKILL-only.  For offline
+    inspection of an already-pulled cell directory, read the relevant
+    XML files yourself (sdb / active.state).
 
     Args:
       info: dict from :func:`read_session_info` (needs ``session`` /
-        ``lib`` / ``cell`` / ``view`` / ``sdb_path`` / ``lib_path``).
-      local_sdb_path: optional local cache path.  When given, the sdb-regex
-        fallback reuses any pre-downloaded sdb at this path
-        (``reuse_if_exists=True``) — saves a scp when the same sdb was
-        already pulled by another reader in the same session.
-
-    Returns the scratch root prefix (e.g. ``/server_local_ssd/USER/simulation``)
-    or ``None`` when both detection paths fail.
+        ``lib`` / ``cell`` / ``view``).
+      local_sdb_path: kept for signature compatibility; not used now
+        that the sdb-XML fallback is gone.
     """
+    del local_sdb_path  # accepted for backwards compat; intentionally unused
     sess = info.get("session") or ""
     lib  = info.get("lib") or ""
     cell = info.get("cell") or ""
     view = info.get("view") or ""
 
-    if sess and lib and cell and view:
-        try:
-            sr = _detect_scratch_root_via_skill(
-                client, session=sess, lib=lib, cell=cell, view=view,
-            )
-            if sr:
-                return sr
-        except Exception:
-            pass
-
-    if info.get("sdb_path"):
-        try:
-            xml_text = read_remote_file(
-                client, info["sdb_path"],
-                local_path=local_sdb_path, reuse_if_exists=True,
-            )
-            return _detect_scratch_root_from_sdb(xml_text, lib, cell, view)
-        except Exception:
-            return None
-    return None
+    if not (sess and lib and cell and view):
+        return None
+    try:
+        return _detect_scratch_root_via_skill(
+            client, session=sess, lib=lib, cell=cell, view=view,
+        )
+    except Exception:
+        return None
 
 
 def detect_session_for_focus(client: VirtuosoClient, *,
@@ -190,7 +168,23 @@ def detect_session_for_focus(client: VirtuosoClient, *,
         client, sdb_path,
         local_path=sdb_cache_path, reuse_if_exists=True,
     )
-    focused_tests = parse_tests_from_sdb_xml(xml_text)
+    # Tiny ad-hoc XML extract — just the <test> name set under <active>,
+    # used to disambiguate which open session owns the focused cellview.
+    # Library no longer exposes a public sdb→dict parser; this stays
+    # inline because it's the only field we need here.
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+    focused_tests: set[str] = set()
+    for active in root.findall("active"):
+        tests_elem = active.find("tests")
+        if tests_elem is None:
+            continue
+        for t in tests_elem.findall("test"):
+            name = (t.text or "").strip()
+            if name:
+                focused_tests.add(name)
     if not focused_tests:
         return None
 
@@ -202,19 +196,25 @@ def detect_session_for_focus(client: VirtuosoClient, *,
     return None
 
 
-def _fetch_window_state(client: VirtuosoClient) -> tuple[str, list[str], list[str]]:
-    """One SKILL round-trip: (focused_name, all_names, all_sessions).
+def _fetch_window_state(client: VirtuosoClient) -> tuple[str, str, list[str], list[str]]:
+    """One SKILL round-trip: (focused_name, focused_session, all_names, all_sessions).
+
+    The focused-window's bound maestro session is read directly from
+    its ``davSession`` attribute — Cadence stores the session id there
+    for ADE Assembler windows.  This avoids the test-name-set sdb scp
+    that older code used for disambiguation when multiple sessions are
+    open.  Empty string for non-maestro windows (schematic / layout /
+    waveform / ...).
 
     No ``geGetEditCellView`` / ``geGetWindowCellView`` here — those warn
     on non-graphic windows like the maestro Assembler (GE-2067).
-    ``maeGetSessions`` is requested instead of per-session ``maeGetSetup``
-    because we don't know which session yet.
     """
     r = client.execute_skill(
         'let((cw) '
         'cw = hiGetCurrentWindow() '
         'list('
         '  if(cw hiGetWindowName(cw) nil) '
+        '  if(cw cw->davSession nil) '
         '  mapcar(lambda((w) hiGetWindowName(w)) hiGetWindowList()) '
         '  maeGetSessions()))'
     )
@@ -222,15 +222,19 @@ def _fetch_window_state(client: VirtuosoClient) -> tuple[str, list[str], list[st
     body = raw.strip()
     if body.startswith("(") and body.endswith(")"):
         body = body[1:-1]
-    # Three slots: curName (quoted string or `nil`), allNames list,
-    # sessions list.  The first slot can be either kind, so ask for both.
+    # Four slots: curName (string|nil), davSession (string|nil),
+    # allNames list, sessions list.  The first two can be atoms, so
+    # accept both shapes.
     chunks = _tokenize_top_level(
-        body, include_strings=True, include_atoms=True, max_tokens=3,
+        body, include_strings=True, include_atoms=True, max_tokens=4,
     )
-    while len(chunks) < 3:
+    while len(chunks) < 4:
         chunks.append("nil")
     cur_name = chunks[0].strip().strip('"') if chunks[0] != "nil" else ""
-    return cur_name, _parse_skill_str_list(chunks[1]), _parse_skill_str_list(chunks[2])
+    cur_sess = chunks[1].strip().strip('"') if chunks[1] != "nil" else ""
+    return (cur_name, cur_sess,
+            _parse_skill_str_list(chunks[2]),
+            _parse_skill_str_list(chunks[3]))
 
 
 def _fetch_viewdir_listing(client: VirtuosoClient, lib: str, cell: str,
@@ -314,12 +318,22 @@ def natural_sort_histories(hist_files: list[str]) -> list[str]:
 
 
 def _resolve_session(client: VirtuosoClient, all_sessions: list[str],
+                     focused_session: str,
                      sdb_path: str, sdb_cache_path: str | None) -> str:
     """Map focused cellview → exactly one open maestro session.
 
-    Trivial cases: 0 sessions → "", 1 session → it.  Otherwise match the
-    focused sdb's test-name set against each session's tests.
+    Resolution order (cheapest → most expensive):
+
+    1. ``focused_session`` from ``hiGetCurrentWindow()->davSession``
+       (single SKILL attribute access — works on any modern Virtuoso).
+    2. Trivial: 1 session open → return it.
+    3. Multi-session fallback: scp the focused sdb and match its
+       ``<test>`` set against each session's ``maeGetSetup`` —
+       only fires if davSession returned nothing (very old IC, or
+       focused window isn't an ADE Assembler).
     """
+    if focused_session and focused_session in all_sessions:
+        return focused_session
     if not all_sessions:
         return ""
     if len(all_sessions) == 1:
@@ -343,6 +357,7 @@ def read_session_info(client: VirtuosoClient, *,
 
     Pipeline:
       1. :func:`_fetch_window_state` — 1 SKILL call → focused title,
+         focused window's ``davSession`` (the bound maestro session id),
          every window title, open sessions list.
       2. :func:`_match_mae_title` — regex the focused title (fall back
          to scanning all titles) → lib / cell / view / mode / unsaved.
@@ -350,13 +365,14 @@ def read_session_info(client: VirtuosoClient, *,
          directory files, history directory files.
       4. :func:`_pick_sdb_file` + :func:`natural_sort_histories` —
          filter + sort the listings.
-      5. :func:`_resolve_session` — if multiple sessions are open, match
-         the focused sdb's tests against each session.
+      5. :func:`_resolve_session` — usually a no-op (davSession from
+         step 1 wins).  Only falls back to sdb-scp test-name matching
+         when davSession came back empty (very old Cadence).
       6. ``_get_test`` — pull the resolved session's first test name.
     """
     from ._skill import _get_test           # local to avoid probes cycle
 
-    cur_name, all_names, all_sessions = _fetch_window_state(client)
+    cur_name, cur_sess, all_names, all_sessions = _fetch_window_state(client)
 
     title_match = _match_mae_title([cur_name]) or _match_mae_title(all_names)
     lib  = title_match.get("lib", "")
@@ -372,7 +388,8 @@ def read_session_info(client: VirtuosoClient, *,
     results_base = (f"{lib_path}/{cell}/{view}/results/maestro"
                     if lib_path and cell and view else "")
 
-    session = _resolve_session(client, all_sessions, sdb_path, sdb_cache_path)
+    session = _resolve_session(client, all_sessions, cur_sess,
+                               sdb_path, sdb_cache_path)
     test = _get_test(client, session) if session else ""
 
     return {
@@ -393,104 +410,3 @@ def read_session_info(client: VirtuosoClient, *,
     }
 
 
-def parse_local_maestro_sdb(path: str | Path, *,
-                             lib_name: str | None = None,
-                             view: str = "maestro") -> dict:
-    """Parse a local maestro.sdb + adjacent ``results/maestro/`` listing.
-
-    Pure-local counterpart to :func:`read_session_info` — no client, no
-    SKILL, no scp.  Use after pulling a cell directory tree to disk
-    (e.g. via ``scp`` / ``tar``) when you want to inspect setup, vars,
-    corners, parameters, and the history catalogue offline.
-
-    Args:
-      path: any of these is accepted —
-        - the ``maestro.sdb`` file itself, or
-        - the ``maestro/`` directory containing it (with ``maestro.sdb``
-          and ``results/maestro/`` inside), or
-        - the cell directory containing ``maestro/maestro.sdb``.
-      lib_name: original library name; only the sdb-regex scratch-root
-        path uses it (filters the path-prefix regex by ``lib/cell/view``).
-        Pass it for usable ``scratch_root_sdb``; otherwise that field is None.
-      view: maestro view name, defaults to ``"maestro"``.  Override for
-        ``maestro_MC`` / ``maestro_2`` / etc.
-
-    Returns: a dict with the on-disk-derivable subset of
-    :func:`read_session_info`'s fields, plus the parsed sdb sections::
-
-        {
-          "cell":            str,                 # from path
-          "view":            str,                 # echoed from arg
-          "lib_name":        str | None,          # echoed from arg
-          "sdb_path":        str,                 # absolute or relative
-          "results_base":    str,                 # may be "" if dir absent
-          "history_list":    list[str],
-          "tests":           list[str],
-          "variables":       {"globals": {...}, "per_test": {...}},
-          "corners":         {name: {...}},
-          "parameters":      [{...}, ...],
-          "scratch_root_sdb": str | None,
-        }
-
-    Live-only fields (``session``, ``application``, ``editable``,
-    ``unsaved_changes``, ``focused_window_title``, ``all_window_titles``)
-    are NOT included — they require a live SKILL channel.
-    """
-    p = Path(path)
-
-    # Resolve to (cell_dir, sdb_path, hist_dir) regardless of which level
-    # the caller pointed us at.
-    if p.is_file():
-        sdb_path = p
-        view_dir = p.parent
-        cell_dir = view_dir.parent
-    elif (p / "maestro.sdb").is_file():
-        sdb_path = p / "maestro.sdb"
-        view_dir = p
-        cell_dir = p.parent
-    elif (p / view / "maestro.sdb").is_file():
-        sdb_path = p / view / "maestro.sdb"
-        view_dir = p / view
-        cell_dir = p
-    else:
-        # Best-effort: assume cell dir even if no sdb yet (still parsable
-        # for history listing).
-        cell_dir = p
-        view_dir = p / view
-        sdb_path = view_dir / "maestro.sdb"
-
-    cell = cell_dir.name
-    hist_dir = view_dir / "results" / "maestro"
-    history_list = (
-        natural_sort_histories([f.name for f in hist_dir.iterdir()])
-        if hist_dir.is_dir() else []
-    )
-
-    out: dict = {
-        "cell":         cell,
-        "view":         view,
-        "lib_name":     lib_name,
-        "sdb_path":     str(sdb_path) if sdb_path.exists() else "",
-        "results_base": str(hist_dir) if hist_dir.is_dir() else "",
-        "history_list": history_list,
-        # Filled in below if sdb is present.
-        "tests":             [],
-        "variables":         {"globals": {}, "per_test": {}},
-        "corners":           {},
-        "parameters":        [],
-        "scratch_root_sdb":  None,
-    }
-
-    if not sdb_path.exists():
-        return out
-
-    xml = sdb_path.read_text(encoding="utf-8", errors="replace")
-    out["tests"]       = sorted(parse_tests_from_sdb_xml(xml))
-    out["variables"]   = parse_variables_from_sdb_xml(xml)
-    out["corners"]     = parse_corners_xml(xml)
-    out["parameters"]  = parse_parameters_from_sdb_xml(xml)
-    if lib_name:
-        out["scratch_root_sdb"] = _detect_scratch_root_from_sdb(
-            xml, lib_name, cell, view,
-        )
-    return out
