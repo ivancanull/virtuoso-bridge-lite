@@ -9,7 +9,7 @@ import re
 import xml.etree.ElementTree as ET
 
 
-def detect_scratch_root_from_sdb(xml_text: str, lib: str, cell: str,
+def _detect_scratch_root_from_sdb(xml_text: str, lib: str, cell: str,
                                   view: str, *,
                                   lib_path: str | None = None) -> str | None:
     """Auto-detect the simulation scratch prefix from ``maestro.sdb``.

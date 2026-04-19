@@ -5,6 +5,7 @@ Submodules:
 - ``_skill``       — low-level SKILL execution helpers
 - ``_parse_skill`` — SKILL output parsers (s-expr, alists, sev outputs)
 - ``_parse_sdb``   — ``maestro.sdb`` XML parsers
+- ``_parse_log``   — maestro history ``.log`` parser
 - ``_compact``     — snapshot reshape helpers
 - ``remote_io``    — scp-backed file transfer
 - ``session``      — focused-session discovery
@@ -18,9 +19,9 @@ Public symbols are re-exported here; external callers should not import
 from submodules directly.
 """
 
+from ._parse_log import parse_history_log
 from ._parse_skill import parse_skill_alist
 from ._parse_sdb import (
-    detect_scratch_root_from_sdb,
     parse_corners_xml,
     parse_parameters_from_sdb_xml,
     parse_tests_from_sdb_xml,
@@ -28,10 +29,8 @@ from ._parse_sdb import (
 )
 from .probes import (
     read_config,
-    read_config_raw,
     read_corners,
     read_env,
-    read_env_raw,
     read_outputs,
     read_status,
     read_variables,
@@ -40,12 +39,11 @@ from .remote_io import read_remote_file
 from .runs import (
     export_waveform,
     find_history_paths,
-    parse_history_log,
     read_latest_history,
     read_results,
 )
 from .session import (
-    detect_scratch_root_via_skill,
+    detect_scratch_root,
     detect_session_for_focus,
     natural_sort_histories,
     parse_local_maestro_sdb,
@@ -62,19 +60,16 @@ __all__ = [
     "parse_tests_from_sdb_xml",
     "parse_variables_from_sdb_xml",
     "parse_history_log",
-    "detect_scratch_root_from_sdb",
     # session (live, needs client)
     "read_session_info",
     "detect_session_for_focus",
-    "detect_scratch_root_via_skill",
+    "detect_scratch_root",
     # session (local, file-system only)
     "parse_local_maestro_sdb",
     "natural_sort_histories",
     # probes
     "read_config",
-    "read_config_raw",
     "read_env",
-    "read_env_raw",
     "read_variables",
     "read_outputs",
     "read_corners",

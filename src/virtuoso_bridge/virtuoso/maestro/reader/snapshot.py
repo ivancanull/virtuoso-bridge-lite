@@ -20,23 +20,20 @@ from ._compact import (
     _compact_status,
     _extract_models,
 )
-from ._parse_sdb import (
-    detect_scratch_root_from_sdb,
-    parse_parameters_from_sdb_xml,
-)
+from ._parse_sdb import parse_parameters_from_sdb_xml
 from .probes import (
     _parse_config,
     _parse_env,
-    read_config_raw,
+    _read_config_raw,
     read_corners,
-    read_env_raw,
+    _read_env_raw,
     read_outputs,
     read_status,
     read_variables,
 )
 from .remote_io import read_remote_file
 from .runs import find_history_paths, read_latest_history, read_results
-from .session import detect_scratch_root_via_skill, read_session_info
+from .session import detect_scratch_root, read_session_info
 
 
 @contextlib.contextmanager
@@ -60,41 +57,6 @@ def _sdb_cache(given: str | None):
             os.unlink(path)
         except OSError:
             pass
-
-
-def _detect_scratch_root(client, info: dict, local_sdb_path: str) -> str | None:
-    """SKILL-first, sdb-regex fallback — whichever answers first wins.
-
-    The SKILL path (``asiGetAnalogRunDir``) works on a fresh (un-simulated)
-    session, so it's preferred.  On older Cadence versions or unexpected
-    setups the call may return nil; fall back to scanning the downloaded
-    ``maestro.sdb`` for matching path prefixes.
-    """
-    sess = info.get("session") or ""
-    lib = info.get("lib") or ""
-    cell = info.get("cell") or ""
-    view = info.get("view") or ""
-    if sess and lib and cell and view:
-        try:
-            sr = detect_scratch_root_via_skill(
-                client, session=sess, lib=lib, cell=cell, view=view,
-            )
-            if sr:
-                return sr
-        except Exception:
-            pass
-    if info.get("sdb_path"):
-        try:
-            xml_text = read_remote_file(
-                client, info["sdb_path"],
-                local_path=local_sdb_path, reuse_if_exists=True,
-            )
-            return detect_scratch_root_from_sdb(
-                xml_text, lib, cell, view, lib_path=info.get("lib_path"),
-            )
-        except Exception:
-            return None
-    return None
 
 
 def snapshot_to_dir(client: VirtuosoClient, *,
@@ -352,10 +314,11 @@ def snapshot(client: VirtuosoClient, *,
         # caller can deliberately omit histories enrichment.  The sdb is
         # already on disk from read_session_info, so detection is cheap.
         if scratch_root is None:
-            scratch_root = _detect_scratch_root(client, info, cache_path)
+            scratch_root = detect_scratch_root(
+                client, info, local_sdb_path=cache_path)
 
-        cfg_raw = read_config_raw(client, sess) if sess else {}
-        env_raw = read_env_raw(client, sess) if sess else {}
+        cfg_raw = _read_config_raw(client, sess) if sess else {}
+        env_raw = _read_env_raw(client, sess) if sess else {}
         cfg = _parse_config(cfg_raw)
         env = _parse_env(env_raw)
 

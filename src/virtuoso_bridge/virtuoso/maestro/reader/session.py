@@ -5,8 +5,9 @@ Live entry points (need a client):
 - ``read_session_info`` — full info dict for the currently focused window.
 - ``detect_session_for_focus`` — map focused cellview to one of several
   open maestro sessions by matching test-name sets.
-- ``detect_scratch_root_via_skill`` — ask Cadence directly for the
-  simulation scratch prefix (``asiGetAnalogRunDir``), no sdb heuristic.
+- ``detect_scratch_root`` — auto-detect the simulation scratch prefix.
+  Tries SKILL ``asiGetAnalogRunDir`` first (works on a fresh / un-simulated
+  session), falls back to scanning the downloaded sdb for path patterns.
 
 Local entry points (no client, just a path):
 
@@ -26,7 +27,7 @@ from virtuoso_bridge import VirtuosoClient
 
 from ._parse_skill import _parse_skill_str_list, _tokenize_top_level
 from ._parse_sdb import (
-    detect_scratch_root_from_sdb,
+    _detect_scratch_root_from_sdb,
     parse_corners_xml,
     parse_parameters_from_sdb_xml,
     parse_tests_from_sdb_xml,
@@ -82,7 +83,7 @@ def _match_mae_title(titles) -> dict:
     return {}
 
 
-def detect_scratch_root_via_skill(client: VirtuosoClient, *,
+def _detect_scratch_root_via_skill(client: VirtuosoClient, *,
                                     session: str, lib: str,
                                     cell: str, view: str) -> str | None:
     """Ask Cadence directly for the simulation scratch prefix.
@@ -114,6 +115,54 @@ def detect_scratch_root_via_skill(client: VirtuosoClient, *,
         out,
     )
     return m.group(1) if m else None
+
+
+def detect_scratch_root(client: VirtuosoClient, info: dict, *,
+                         local_sdb_path: str | None = None) -> str | None:
+    """Auto-detect the simulation scratch prefix — SKILL first, sdb fallback.
+
+    Tries :func:`asiGetAnalogRunDir` (works on a fresh / un-simulated
+    session) first.  On failure, scans the downloaded ``maestro.sdb`` for
+    matching ``{prefix}/{lib}/{cell}/{view}/results/maestro/`` patterns.
+
+    Args:
+      info: dict from :func:`read_session_info` (needs ``session`` /
+        ``lib`` / ``cell`` / ``view`` / ``sdb_path`` / ``lib_path``).
+      local_sdb_path: optional local cache path.  When given, the sdb-regex
+        fallback reuses any pre-downloaded sdb at this path
+        (``reuse_if_exists=True``) — saves a scp when the same sdb was
+        already pulled by another reader in the same session.
+
+    Returns the scratch root prefix (e.g. ``/server_local_ssd/USER/simulation``)
+    or ``None`` when both detection paths fail.
+    """
+    sess = info.get("session") or ""
+    lib  = info.get("lib") or ""
+    cell = info.get("cell") or ""
+    view = info.get("view") or ""
+
+    if sess and lib and cell and view:
+        try:
+            sr = _detect_scratch_root_via_skill(
+                client, session=sess, lib=lib, cell=cell, view=view,
+            )
+            if sr:
+                return sr
+        except Exception:
+            pass
+
+    if info.get("sdb_path"):
+        try:
+            xml_text = read_remote_file(
+                client, info["sdb_path"],
+                local_path=local_sdb_path, reuse_if_exists=True,
+            )
+            return _detect_scratch_root_from_sdb(
+                xml_text, lib, cell, view, lib_path=info.get("lib_path"),
+            )
+        except Exception:
+            return None
+    return None
 
 
 def detect_session_for_focus(client: VirtuosoClient, *,
@@ -362,8 +411,8 @@ def parse_local_maestro_sdb(path: str | Path, *,
         - the ``maestro/`` directory containing it (with ``maestro.sdb``
           and ``results/maestro/`` inside), or
         - the cell directory containing ``maestro/maestro.sdb``.
-      lib_name: original library name; only ``detect_scratch_root_from_sdb``
-        consumes it (it filters the path-prefix regex by ``lib/cell/view``).
+      lib_name: original library name; only the sdb-regex scratch-root
+        path uses it (filters the path-prefix regex by ``lib/cell/view``).
         Pass it for usable ``scratch_root_sdb``; otherwise that field is None.
       view: maestro view name, defaults to ``"maestro"``.  Override for
         ``maestro_MC`` / ``maestro_2`` / etc.
@@ -443,7 +492,7 @@ def parse_local_maestro_sdb(path: str | Path, *,
     out["corners"]     = parse_corners_xml(xml)
     out["parameters"]  = parse_parameters_from_sdb_xml(xml)
     if lib_name:
-        out["scratch_root_sdb"] = detect_scratch_root_from_sdb(
+        out["scratch_root_sdb"] = _detect_scratch_root_from_sdb(
             xml, lib_name, cell, view,
         )
     return out

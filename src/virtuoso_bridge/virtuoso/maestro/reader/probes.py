@@ -41,7 +41,7 @@ def _read_sdb_xml(client: VirtuosoClient, sdb_path: str, *,
 # Config (tests + analyses)
 # ---------------------------------------------------------------------------
 
-def read_config_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
+def _read_config_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
     """Fetch SKILL probes for test configuration — raw output strings only.
 
     Returns a flat ``{label: raw_output_string}`` dict.  Labels match the
@@ -74,7 +74,7 @@ def read_config_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
 
 
 def _parse_config(raw: dict[str, str]) -> dict:
-    """Pure: turn read_config_raw output into structured fields."""
+    """Pure: turn _read_config_raw output into structured fields."""
     tests = _parse_sexpr(raw.get("maeGetSetup", "")) or []
     if not isinstance(tests, list):
         tests = [tests] if tests else []
@@ -104,16 +104,16 @@ def read_config(client: VirtuosoClient, session: str) -> dict:
          "analyses": {ana_name: {param: value, ...}}}
 
     For the raw SKILL output strings (debug / offline re-parse), use
-    ``read_config_raw``.
+    ``_read_config_raw``.
     """
-    return _parse_config(read_config_raw(client, session))
+    return _parse_config(_read_config_raw(client, session))
 
 
 # ---------------------------------------------------------------------------
 # Env options + sim options
 # ---------------------------------------------------------------------------
 
-def read_env_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
+def _read_env_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
     """Fetch SKILL probes for env + sim options — raw output strings only.
 
     Run mode, job control, and simulation messages are part of the
@@ -135,7 +135,7 @@ def read_env_raw(client: VirtuosoClient, session: str) -> dict[str, str]:
 
 
 def _parse_env(raw: dict[str, str]) -> dict:
-    """Pure: turn read_env_raw output into structured fields."""
+    """Pure: turn _read_env_raw output into structured fields."""
     return {
         "env_options": parse_skill_alist(raw.get("maeGetEnvOption", "")),
         "sim_options": parse_skill_alist(raw.get("maeGetSimOption", "")),
@@ -149,9 +149,9 @@ def read_env(client: VirtuosoClient, session: str) -> dict:
 
         {"env_options": {...},  "sim_options": {...}}
 
-    For the raw SKILL output strings, use ``read_env_raw``.
+    For the raw SKILL output strings, use ``_read_env_raw``.
     """
-    return _parse_env(read_env_raw(client, session))
+    return _parse_env(_read_env_raw(client, session))
 
 
 # ---------------------------------------------------------------------------
