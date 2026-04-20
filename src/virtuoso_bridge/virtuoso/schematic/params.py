@@ -51,7 +51,7 @@ let((cv inst iCDF cCDF saved cdfgData cdfgForm p cb n)
   foreach(n list({params})
     p = get(cCDF n)
     unless(p error(sprintf(nil "unknown CDF param: %s" n)))
-    p~>value = getq(paramVals n))
+    p~>value = arrayref(paramVals n))
   foreach(n list({params})
     p = get(cCDF n)
     cb = p~>callback
@@ -202,50 +202,6 @@ def set_instance_params(
         return {}
 
     schematic_lib, schematic_cell = _resolve_active_schematic_lib_cell(client)
-    inst_lib, inst_cell = _resolve_instance_master(client, schematic_lib, schematic_cell, inst_name)
-
-    allowed: list[str] | None = None
-    if param_filters is not None:
-        allowed = _match_filter(_load_filters(param_filters), inst_lib, inst_cell)
-
-    rejected = [name for name in params if allowed is not None and name not in allowed]
-    if strict and rejected:
-        raise ValueError(f"params not allowed by filter for {inst_lib}/{inst_cell}: {rejected}")
-    if rejected:
-        warnings.warn(
-            f"params ignored by filter for {inst_lib}/{inst_cell}: {rejected}",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    apply_params = {name: value for name, value in params.items() if allowed is None or name in allowed}
-    return _run_batched_param_update(
-        client,
-        schematic_lib,
-        schematic_cell,
-        inst_name,
-        apply_params,
-    )
-
-
-def set_general_instance_params(
-    client: VirtuosoClient,
-    schematic_lib: str,
-    schematic_cell: str,
-    inst_name: str,
-    *,
-    param_filters: str | Path | None = _DEFAULT_FILTERS_PATH,
-    strict: bool = False,
-    **params: str,
-) -> dict[str, str]:
-    """Set CDF params on any instance, filtered by cdf_param_filters.yaml.
-
-    This API is kept as a convenience wrapper; `set_instance_params` remains
-    the primary and backward-compatible entry point.
-    """
-    if not params:
-        return {}
-
     inst_lib, inst_cell = _resolve_instance_master(client, schematic_lib, schematic_cell, inst_name)
 
     allowed: list[str] | None = None
