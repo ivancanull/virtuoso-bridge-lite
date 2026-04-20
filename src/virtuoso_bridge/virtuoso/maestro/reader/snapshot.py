@@ -98,49 +98,123 @@ def _dump_skill_text(snap_dir: Path, sections: list[tuple[str, str]]) -> None:
         (snap_dir / "state_from_skill.txt").write_text(text, encoding="utf-8")
 
 
-# Per-point artifacts pulled into ``snap_dir/<history>/``.  We keep
-# text (and small binary) files needed to reproduce / inspect a run;
-# we skip PSF waveform databases (``*.raw``, ``wavedb/``), which are
-# huge and proprietary.  Captured per point:
+# Per-point artifacts pulled into ``snap_dir/<history>/``.
 #
+# Always captured (inputs + run logs):
 #   netlist/*          everything the Virtuoso netlister generates —
 #                      input.scs plus stimuli, include, modelpath,
 #                      control, runObjFile, cdfInst*, etc.
 #   psf/spectre.out    spectre stdout
 #   psf/logFile        spectre logFile
+#   <history>.log      OA history summary (maestro/results level)
 #
-# Plus the OA history summary ``<history>.log`` at the maestro/results
-# level.
+# Captured when ``include_results=True`` (default; MB-scale per run):
+#   psf/dcOp.dc           DC node voltages
+#   psf/dcOpInfo.info     per-MOS operating point (gm, vth, vds, cgg ...)
+#   psf/ac.ac             AC sweep result
+#   psf/noise.noise       noise spectrum
+#   psf/tran.tran         transient waveform
+#   psf/pss.pss / psf/pnoise.pnoise / psf/pac.pac / psf/stb.stb / psf/xf.xf
+#                         periodic / stability / transfer analyses
+#   psf/variables_file    exact design-var values used
+#   psf/spectre.dc|.ic|.fc  spectre state/initial-conditions aux
+#   <history>.rdb         Maestro results DB (computed output expressions)
+#   <history>.msg.db      Maestro run message DB
+#
+# Always skipped (PDK / netlister boilerplate, derivable elsewhere,
+# or huge binary):
+#   psf/modelParameter.info       — PDK model params (already in .scs models)
+#   psf/primitives.info.primitives — PDK primitive catalog
+#   psf/subckts.info.subckts       — PDK subckt dumps
+#   psf/designParamVals.info       — derived param expansions
+#   psf/element.info               — per-element (post-flatten) bias;
+#                                    dcOpInfo.info covers design-level view
+#   psf/outputParameter.info       — derived output-expression dumps
+#   psf/*.raw                      — huge PSF binary waveforms
+#   psf/wavedb/                    — proprietary waveform DB
+
+# Explicit whitelist of psf result filenames we pull (plus other
+# analysis-specific files matched by suffix below).
+_PSF_RESULT_NAMES = (
+    "dcOp.dc",
+    "dcOpInfo.info",
+    "variables_file",
+    "spectre.dc",
+    "spectre.ic",
+    "spectre.fc",
+)
+
+# Suffix whitelist for spectre analysis output files.  Names are
+# ``<analysisName>.<suffix>`` where suffix equals the analysis type.
+_PSF_RESULT_SUFFIXES = (
+    ".ac", ".dc", ".tran", ".noise",
+    ".pss", ".pnoise", ".pac", ".pxf",
+    ".stb", ".xf", ".sens",
+)
 
 
 def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                          history: str, lib_path: str, scratch_root: str,
-                         lib: str, cell: str, view: str) -> None:
-    """Pull per-point ``netlist/*`` + ``psf/spectre.out`` + ``psf/logFile``
-    plus the OA ``.log`` for ``history`` into ``snap_dir/<history>/``.
+                         lib: str, cell: str, view: str,
+                         include_results: bool = True) -> None:
+    """Pull per-point inputs (+ optionally results) for ``history`` into
+    ``snap_dir/<history>/``.
 
     Single ssh round-trip: server-side ``find | tar`` packs all matched
     files into one tarball, one ``scp`` pulls it down, local extract
     rebuilds the per-point layout.
+
+    ``include_results=True`` (default) also grabs the spectre simulation
+    *result* files (dcOp/dcOpInfo/ac/noise/tran/etc.) and the
+    Maestro-level ``.rdb`` / ``.msg.db`` DBs.  PDK / netlister info
+    dumps (``modelParameter.info``, ``element.info``,
+    ``primitives.info.primitives``, ...) and PSF binary waveforms
+    (``*.raw``, ``wavedb/``) stay skipped — they duplicate the models
+    or are proprietary binary blobs.  Set to ``False`` for an
+    inputs-only snapshot.
     """
     if not (history and lib_path and scratch_root):
         return
     runner = client._tunnel._ssh_runner
-    log_remote = f"{lib_path}/{cell}/{view}/results/maestro/{history}.log"
+    maestro_dir = f"{lib_path}/{cell}/{view}/results/maestro"
+    log_remote = f"{maestro_dir}/{history}.log"
     hist_remote = (f"{scratch_root}/{lib}/{cell}/{view}"
                    f"/results/maestro/{history}")
     remote_tar = f"/tmp/vb_snap_{uuid.uuid4().hex}.tar"
 
-    # Match clauses:
-    #   -path '*/netlist/*' — every file under any per-point netlist/ dir
-    #   -name spectre.out   — per-point psf/spectre.out
-    #   -name logFile       — per-point psf/logFile
-    # PSF waveforms (.raw, wavedb/) don't match any clause → skipped.
+    # Per-point find clauses.
+    #   Always: netlist/* + spectre.out + logFile.
+    #   include_results: whitelist psf/ result files by exact name or
+    #   analysis-suffix. We *do not* include all psf/* — PDK dumps
+    #   like modelParameter.info / element.info / primitives.info.*
+    #   are large (100s of KB each) and add no DUT-analysis value
+    #   (model params are already in .scs, per-element bias is
+    #   derivable from dcOpInfo.info).
+    clauses = "-path '*/netlist/*' -o -name spectre.out -o -name logFile"
+    if include_results:
+        psf_names = " -o ".join(
+            f"-name '{n}'" for n in _PSF_RESULT_NAMES
+        )
+        psf_suffix = " -o ".join(
+            f"-name '*{s}'" for s in _PSF_RESULT_SUFFIXES
+        )
+        clauses += (f" -o \\( -path '*/psf/*' \\( "
+                    f"{psf_names} -o {psf_suffix} "
+                    f"\\) \\)")
+
+    # Maestro-level extra files (siblings of <history>.log):
+    #   always:            <history>.log
+    #   include_results:   <history>.rdb, <history>.msg.db
+    maestro_extras = [log_remote]
+    if include_results:
+        maestro_extras.append(f"{maestro_dir}/{history}.rdb")
+        maestro_extras.append(f"{maestro_dir}/{history}.msg.db")
+    extras_str = " ".join(maestro_extras)
+
     tar_cmd = (
-        f"find {hist_remote} -type f \\( "
-        f"-path '*/netlist/*' -o -name spectre.out -o -name logFile "
-        f"\\) -print 2>/dev/null "
-        f"| tar -cf {remote_tar} -P -T - {log_remote} 2>/dev/null && echo OK"
+        f"find {hist_remote} -type f \\( {clauses} \\) -print 2>/dev/null "
+        f"| tar -cf {remote_tar} -P -T - --ignore-failed-read "
+        f"{extras_str} 2>/dev/null && echo OK"
     )
     r = runner.run_command(tar_cmd, timeout=30)
     if "OK" not in (r.stdout or ""):
@@ -158,10 +232,14 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                 if not m.isfile():
                     continue
                 # Map remote absolute path → local relative path under
-                # snap_dir/<history>/.  The OA .log is a sibling of the
-                # history dir; per-point files keep their relative path.
-                if m.name.endswith(f"{history}.log"):
-                    target = hist_dir / f"{history}.log"
+                # snap_dir/<history>/.  Maestro-level ``<history>.log``
+                # / ``.rdb`` / ``.msg.db`` land flat in hist_dir;
+                # per-point files keep their relative path.
+                base = m.name.rsplit("/", 1)[-1]
+                if base in (f"{history}.log",
+                            f"{history}.rdb",
+                            f"{history}.msg.db"):
+                    target = hist_dir / base
                 elif f"/{history}/" in m.name:
                     target = hist_dir / m.name.split(f"/{history}/", 1)[1]
                 else:
