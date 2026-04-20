@@ -21,7 +21,7 @@ from pathlib import Path
 from virtuoso_bridge import VirtuosoClient
 
 from ._parse_sdb import _sdb_active_tests, filter_active_state_xml, filter_sdb_xml
-from .bundle import full_bundle
+from .bundle import brief_bundle, full_bundle
 from .session import _fetch_window_state, natural_sort_histories
 
 
@@ -219,8 +219,15 @@ def snapshot(client: VirtuosoClient, *,
     lib, cell = win["lib"], win["cell"]
     view = win["view"] or "maestro"
 
-    bundle = full_bundle(client, sess=sess, lib=lib, cell=cell, view=view) \
-             if sess else {}
+    # Brief mode (no output_root) → 4 probes, 1 round-trip.
+    # Disk-dump mode → full 16+ probes, 2 round-trips, plus path /
+    # history info needed by _dump_to_dir.
+    if not sess:
+        bundle = {}
+    elif output_root is None:
+        bundle = brief_bundle(client, sess=sess, lib=lib, cell=cell, view=view)
+    else:
+        bundle = full_bundle(client, sess=sess, lib=lib, cell=cell, view=view)
 
     out: dict = {
         "session":      sess,

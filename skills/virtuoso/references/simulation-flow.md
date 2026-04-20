@@ -9,7 +9,7 @@ Complete flow from opening Maestro to reading results. Follow this order exactly
 ```python
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
 from virtuoso_bridge.virtuoso.maestro import (
-    read_config, read_results, save_setup, run_and_wait,
+    read_results, save_setup, run_and_wait,
     open_gui_session, close_gui_session, purge_maestro_cellviews,
 )
 

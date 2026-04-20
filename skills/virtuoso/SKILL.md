@@ -150,7 +150,7 @@ Load on demand — each contains detailed API docs and edge-case guidance:
 | `references/layout-skill-api.md` | Layout SKILL API, read/query, mosaic, layer control |
 | `references/layout-python-api.md` | LayoutEditor, LayoutOps, shape/via/instance creation |
 | `references/maestro-skill-api.md` | mae* SKILL functions, OCEAN, corners, known blockers |
-| `references/maestro-python-api.md` | Session, read_config (verbose 0/1/2), writer functions |
+| `references/maestro-python-api.md` | snapshot() (raw SKILL sections) + filter_*_xml + writer functions |
 | `references/simulation-flow.md` | **Standard simulation flow** — 8-step guide, pitfalls, optimization loops |
 | `references/netlist.md` | CDL/Spectre netlist formats, spiceIn import |
 | `references/troubleshooting.md` | Known gotchas, GUI blocking, CDF quirks, connection issues |
@@ -316,16 +316,20 @@ data_with_pos = read_schematic(client, LIB, CELL, include_positions=True)
 # No CDF param filtering (return all 200+ PDK params):
 raw = read_schematic(client, LIB, CELL, include_positions=False, param_filters=None)
 
-# 2. Maestro — use open_session / read_config / close_session
-from virtuoso_bridge.virtuoso.maestro import open_session, close_session, read_config
-session = open_session(client, LIB, CELL)       # maeOpenSetup (background, no GUI)
-config = read_config(client, session)            # dict of key -> (skill_expr, raw)
-# config keys: maeGetSetup (tests), maeGetEnabledAnalysis, maeGetAnalysis:XXX,
-#              maeGetTestOutputs, variables, parameters, corners
-close_session(client, session)
+# 2. Maestro — snapshot the focused window (no session arg needed)
+from virtuoso_bridge.virtuoso.maestro import snapshot
+d = snapshot(client)                             # SKILL-only, ~150ms, 1 round-trip
+# d["raw_sections"] = [(probe_skill_text, raw_output), ...]
+#   Each label IS the actual SKILL string we ran (e.g.
+#   'maeGetAnalysis("test" "ac" ?session "fnxSession18")');
+#   value is the verbatim SKILL alist — no Python parsing.
+# d also has session / lib / cell / view / mode / unsaved.
 
-# IMPORTANT: Do NOT use deOpenCellView for maestro — it opens read-only and
-# returns incomplete data. Always use open_session (= maeOpenSetup).
+# Full disk dump (raw + YAML-filtered XMLs + 16 SKILL probes + per-point run files):
+d = snapshot(client, output_root="output/")      # → d["output_dir"]
+
+# IMPORTANT: snapshot() always uses the CURRENTLY FOCUSED maestro window.
+# Click the desired ADE Assembler first, or use open_session() to bring it up.
 
 # 3. Netlist — generate from maestro session, download via SSH
 session = open_session(client, LIB, CELL)
@@ -448,10 +452,12 @@ When Maestro OCEAN functions fail (due to missing PSF waveform data), parse the 
 ```python
 def read_maestro_results_from_log(client, LIB, CELL, history):
     """Read simulation results from the log file - most reliable method."""
-    
-    # Determine base path - adjust for your project structure
-    base = f"/home/zhangz/TSMC28N/2025_LLM_AGENT/{LIB}"
-    log_path = f"{base}/{CELL}/maestro/results/maestro/{history}.log"
+
+    # Resolve the OA library path via SKILL — works on any setup,
+    # no hardcoded ``/home/USER/...`` assumption.
+    r = client.execute_skill(f'ddGetObj("{LIB}")~>readPath')
+    lib_path = (r.output or "").strip().strip('"')
+    log_path = f"{lib_path}/{CELL}/maestro/results/maestro/{history}.log"
     client.download_file(log_path, "/tmp/sim.log")
     
     # Parse tab-separated format: "expression\t\tvalue"

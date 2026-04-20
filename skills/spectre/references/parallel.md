@@ -5,7 +5,6 @@
 - Batch with run_parallel()
 - Concurrency control
 - Multi-server simulation
-- Job management CLI (sim-jobs, sim-cancel)
 - .env configuration
 
 ---
@@ -73,30 +72,6 @@ t2 = sim2.submit(Path("tb_dac.scs"))
 
 results = SpectreSimulator.wait_all([t1, t2])
 ```
-
-## Job management (CLI)
-
-Monitor and control simulations from the terminal:
-
-```bash
-# Show all jobs: user@host, status, time, CPU/MEM for running jobs
-virtuoso-bridge sim-jobs
-
-# Cancel a running simulation (kills remote Spectre process)
-virtuoso-bridge sim-cancel <job-id>
-```
-
-`sim-jobs` output:
-```
-Simulation Jobs: 2 running, 1 queued, 3 done, 0 failed
-
-● a3f2c1d0  zhangz@zhangz-wei         tb_comp.scs              running  16:45:29 45s  CPU:98.2% MEM:3.1%
-● b7e9a412  designer1@wei-worker1     tb_dac.scs               running  16:45:30 12s  CPU:45.7% MEM:1.8%
-○ c4d5e6f7  zhangz@zhangz-wei         tb_logic.scs             queued   16:45:35 0s
-✓ d8e9f012  zhangz@zhangz-wei         tb_bias.scs              done     16:44:10-16:44:25 15s
-```
-
-Finished jobs auto-expire after 10 minutes.
 
 ## .env configuration
 

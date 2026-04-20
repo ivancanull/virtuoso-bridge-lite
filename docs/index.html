@@ -273,21 +273,24 @@ result = sim.<span class="fn">run_simulation</span>(<span class="str">"tb_inv.sc
     <div class="api-group">
       <h3>ADE Maestro (Assembler)</h3>
       <pre><code><span class="kw">from</span> virtuoso_bridge.virtuoso.maestro <span class="kw">import</span> (
-    open_session, close_session, read_config, read_results,
-    run_simulation, wait_until_done, export_waveform,
+    snapshot, open_gui_session, close_gui_session,
+    run_and_wait, read_results, export_waveform,
 )
 
-<span class="cmt"># Read existing simulation setup</span>
-session = <span class="fn">open_session</span>(client, <span class="str">"myLib"</span>, <span class="str">"myTB"</span>)
-config = <span class="fn">read_config</span>(client, session)
+<span class="cmt"># Snapshot the focused maestro window — no session arg needed.
+# Returns dict with raw_sections (list of (skill_probe, raw_output)
+# tuples — no Python parsing of SKILL alists).</span>
+d = <span class="fn">snapshot</span>(client)
+<span class="cmt"># Or also write the full disk dump (raw + filtered XMLs +
+# state_from_skill.txt + per-point run files via tar):</span>
+d = <span class="fn">snapshot</span>(client, output_root=<span class="str">"output/"</span>)
 
-<span class="cmt"># Run simulation (non-blocking, LSCS parallel)</span>
-<span class="fn">run_simulation</span>(client)
-<span class="fn">wait_until_done</span>(client)  <span class="cmt"># axlSessionConnect callback, zero blocking</span>
-
-<span class="cmt"># Collect results + export waveforms</span>
+<span class="cmt"># Open / run / collect — GUI mode is required for run_and_wait</span>
+session = <span class="fn">open_gui_session</span>(client, <span class="str">"myLib"</span>, <span class="str">"myTB"</span>)
+<span class="fn">run_and_wait</span>(client, session)  <span class="cmt"># non-blocking, SKILL callback + ssh polling</span>
 results = <span class="fn">read_results</span>(client, session, lib=<span class="str">"myLib"</span>, cell=<span class="str">"myTB"</span>)
-<span class="fn">export_waveform</span>(client, session, <span class="str">'dB20(mag(v("/OUT")))'</span>, <span class="str">"gain.txt"</span>)</code></pre>
+<span class="fn">export_waveform</span>(client, session, <span class="str">'dB20(mag(v("/OUT")))'</span>, <span class="str">"gain.txt"</span>)
+<span class="fn">close_gui_session</span>(client)</code></pre>
     </div>
 
     <div class="api-group">
@@ -322,6 +325,10 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
         <tr><td><code>virtuoso-bridge status</code></td><td>Check tunnel, daemon, hostname, Spectre license</td></tr>
         <tr><td><code>virtuoso-bridge restart</code></td><td>Restart tunnel</td></tr>
         <tr><td><code>virtuoso-bridge stop</code></td><td>Stop tunnel</td></tr>
+        <tr><td><code>virtuoso-bridge windows</code></td><td>List Virtuoso windows + focused session</td></tr>
+        <tr><td><code>virtuoso-bridge snapshot</code></td><td>Dump focused maestro's SKILL probe sections to stdout</td></tr>
+        <tr><td><code>virtuoso-bridge snapshot -o ROOT</code></td><td>Full disk dump (raw + filtered XMLs + per-point run files)</td></tr>
+        <tr><td><code>virtuoso-bridge screenshot</code></td><td>Capture a Virtuoso window</td></tr>
       </table>
     </div>
   </div>
@@ -331,12 +338,13 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
     <h2>Examples</h2>
     <table>
       <tr><th>Category</th><th>Example</th><th>Description</th></tr>
-      <tr><td rowspan="6">Basic</td><td><code>01_execute_skill.py</code></td><td>Run SKILL expressions (Hello World)</td></tr>
-      <tr><td><code>02_load_il.py</code></td><td>Load .il file into Virtuoso</td></tr>
-      <tr><td><code>03_list_library_cells.py</code></td><td>Enumerate libraries and cells</td></tr>
-      <tr><td><code>04_screenshot.py</code></td><td>Capture window screenshot and download</td></tr>
+      <tr><td rowspan="7">Basic</td><td><code>00_ciw_output_vs_return.py</code></td><td>Compare CIW print vs SKILL return value</td></tr>
+      <tr><td><code>01_execute_skill.py</code></td><td>Run SKILL expressions (Hello World)</td></tr>
+      <tr><td><code>02_ciw_print.py</code></td><td>Print to Virtuoso CIW</td></tr>
+      <tr><td><code>03_load_il.py</code></td><td>Load .il file into Virtuoso</td></tr>
+      <tr><td><code>04_list_library_cells.py</code></td><td>Enumerate libraries and cells</td></tr>
       <tr><td><code>05_multiline_skill.py</code></td><td>Execute multi-line SKILL code</td></tr>
-      <tr><td><code>06_ciw_print.py</code></td><td>Print to Virtuoso CIW</td></tr>
+      <tr><td><code>06_screenshot.py</code></td><td>Capture window screenshot and download</td></tr>
       <tr><td rowspan="6">Layout</td><td><code>01_create_layout.py</code></td><td>Create layout with NMOS/PMOS/CFMOM instances</td></tr>
       <tr><td><code>02_add_polygon.py</code></td><td>Add polygon shapes</td></tr>
       <tr><td><code>03_add_via.py</code></td><td>Place vias</td></tr>
@@ -348,14 +356,16 @@ bridge = VirtuosoClient.<span class="fn">local</span>(port=65432)</code></pre>
       <tr><td><code>02_read_connectivity.py</code></td><td>Read nets, pins, instances</td></tr>
       <tr><td><code>03_read_instance_params.py</code></td><td>Read instance parameters</td></tr>
       <tr><td><code>08_import_cdl_cap_array.py</code></td><td>Import CDL netlist via spiceIn</td></tr>
-      <tr><td rowspan="4">Maestro</td><td><code>01_read_open_maestro.py</code></td><td>Read open Maestro session</td></tr>
-      <tr><td><code>02_gui_open_read_close.py</code></td><td>GUI mode: open, read config, close</td></tr>
+      <tr><td rowspan="6">Maestro</td><td><code>01_read_focused_maestro.py</code></td><td>snapshot() of focused maestro</td></tr>
+      <tr><td><code>03_bg_open_read_close_maestro.py</code></td><td>Background open/close + snapshot</td></tr>
       <tr><td><code>06a_rc_create.py</code></td><td>Create Maestro test for RC filter</td></tr>
-      <tr><td><code>06b/06c_rc_simulate.py</code></td><td>Run simulation and read results</td></tr>
-      <tr><td rowspan="4">Spectre</td><td><code>01_veriloga_adc_dac.py</code></td><td>4-bit ADC/DAC with Verilog-A</td></tr>
+      <tr><td><code>06b_rc_simulate_and_read.py</code></td><td>Run simulation, read scalar results, export waveforms</td></tr>
+      <tr><td><code>07_gui_session_lifecycle.py</code></td><td>open_gui_session / close_gui_session lifecycle</td></tr>
+      <tr><td><code>09_snapshot_with_metrics.py</code></td><td>Full disk dump (snapshot -o ROOT) with timing metrics</td></tr>
+      <tr><td rowspan="4">Spectre</td><td><code>01_inverter_tran.py</code></td><td>CMOS inverter transient simulation</td></tr>
+      <tr><td><code>01_veriloga_adc_dac.py</code></td><td>4-bit ADC/DAC with Verilog-A</td></tr>
       <tr><td><code>02_cap_dc_ac.py</code></td><td>RC filter DC+AC frequency response</td></tr>
       <tr><td><code>04_strongarm_pss_pnoise.py</code></td><td>StrongArm comparator PSS+Pnoise</td></tr>
-      <tr><td><code>flower.py</code></td><td>Draw a flower in layout (fun demo)</td></tr>
     </table>
   </div>
 

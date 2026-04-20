@@ -238,9 +238,9 @@ virtuoso-bridge stop            # stop the SSH tunnel
 virtuoso-bridge restart         # force-restart
 virtuoso-bridge status          # check tunnel + Virtuoso daemon + Spectre
 virtuoso-bridge license         # check Spectre license availability
-virtuoso-bridge sim-jobs        # show submitted simulation jobs
-virtuoso-bridge sim-cancel ID   # cancel a running simulation
-virtuoso-bridge windows         # list all open Virtuoso windows
+virtuoso-bridge windows         # list all open Virtuoso windows + focused session
+virtuoso-bridge snapshot        # focused maestro: 4 SKILL probe sections to stdout
+virtuoso-bridge snapshot -o ROOT  # full disk dump (raw + filtered XMLs + per-point run files)
 virtuoso-bridge screenshot      # screenshot CIW (or: current, N)
 virtuoso-bridge dismiss-dialog  # dismiss blocking GUI dialogs via X11
 ```
@@ -280,7 +280,7 @@ When working on a task, check this table to find relevant skills and references.
 | **Maestro / ADE** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/maestro-python-api.md`, `references/maestro-skill-api.md`, `references/simulation-flow.md` |
 | **Spectre simulation** | `spectre` | `skills/spectre/SKILL.md` | `references/netlist_syntax.md`, `references/parallel.md` |
 | **Netlist** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/netlist.md`, `references/batch-netlist-si.md` |
-| **Testbench migration** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/testbench-migration.md` |
+| **Testbench duplication** | `virtuoso` | `skills/virtuoso/SKILL.md` | `references/testbench-duplication.md` |
 | **Parameter optimization** | `optimizer` | `skills/optimizer/SKILL.md` | — |
 
 All reference paths are relative to the skill directory (e.g. `skills/virtuoso/references/layout-skill-api.md`).

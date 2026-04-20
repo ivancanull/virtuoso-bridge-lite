@@ -6,19 +6,29 @@ Python wrapper for Cadence Maestro (ADE Assembler) SKILL functions.
 
 ```python
 from virtuoso_bridge import VirtuosoClient
-from virtuoso_bridge.virtuoso.maestro import open_session, close_session, read_config
+from virtuoso_bridge.virtuoso.maestro import (
+    snapshot,                                     # one-shot setup snapshot
+    filter_sdb_xml, filter_active_state_xml,      # XML filters (pure)
+    read_results, export_waveform,                # post-sim consumption
+    open_session, close_session, find_open_session,
+    open_gui_session, close_gui_session, run_and_wait,
+    save_setup, purge_maestro_cellviews,
+    create_test, set_design, set_analysis,
+    set_var, set_corner, set_env_option, set_sim_option,
+    add_output, set_spec, run_simulation, ...    # writers — see "Write" below
+)
 ```
 
 ## Two Session Modes
 
-| | Background (`open_session`) | GUI (`deOpenCellView`) |
+| | Background (`open_session`) | GUI (`open_gui_session`) |
 |---|---|---|
 | Lock file | Creates `.cdslck` | Creates `.cdslck` |
 | Read config | Yes | Yes |
 | Write config | Yes | Yes (needs `maeMakeEditable`) |
 | Run simulation | Can start, but `close_session` cancels it | Yes |
 | `run_and_wait` | Starts + callback never fires reliably | Starts + waits for completion |
-| Close | `close_session` → lock removed | `hiCloseWindow` |
+| Close | `close_session` → lock removed | `close_gui_session` |
 
 **Use background for read/write config. Use GUI for simulation.**
 
@@ -35,6 +45,9 @@ See **[simulation-flow.md](simulation-flow.md)** for the complete 8-step guide (
 | `open_session(client, lib, cell) -> str` | `maeOpenSetup` | Background open, returns session string |
 | `close_session(client, session)` | `maeCloseSession` | Background close |
 | `find_open_session(client) -> str \| None` | `maeGetSessions` + `maeGetSetup` | Find first active session with valid test |
+| `open_gui_session(client, lib, cell) -> str` | `deOpenCellView` + `maeMakeEditable` | GUI open (required for simulation) |
+| `close_gui_session(client)` | `hiCloseWindow` | GUI close |
+| `purge_maestro_cellviews(client)` | `dbPurgeCellView` | Clean stale internal locks before opening |
 
 ```python
 session = open_session(client, "PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC")
@@ -42,72 +55,98 @@ session = open_session(client, "PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC")
 close_session(client, session)
 ```
 
-## Read — Three independent functions
+## Read — `snapshot()` (single entry)
 
-`maestro/reader.py`
+`maestro/reader/snapshot.py`
 
-All return `dict[str, tuple[str, str]]` where key = label, value = `(skill_expr, raw_output)`.
-
-### read_config — test setup
-
-| Key | SKILL |
-|-----|-------|
-| `maeGetSetup` | `maeGetSetup(?session session)` |
-| `maeGetEnabledAnalysis` | `maeGetEnabledAnalysis(test ?session session)` |
-| `maeGetAnalysis:<name>` | `maeGetAnalysis(test name ?session session)` — one per enabled analysis |
-| `maeGetTestOutputs` | `maeGetTestOutputs(test ?session session)` — returns `(name type signal expression)` |
-| `variables` | `maeGetSetup(?session session ?typeName "variables")` |
-| `parameters` | `maeGetSetup(?session session ?typeName "parameters")` |
-| `corners` | `maeGetSetup(?session session ?typeName "corners")` |
-
-### read_env — system settings
-
-| Key | SKILL |
-|-----|-------|
-| `maeGetEnvOption` | `maeGetEnvOption(test ?session session)` — model files, view lists, etc. |
-| `maeGetSimOption` | `maeGetSimOption(test ?session session)` — reltol, temp, gmin, etc. |
-| `maeGetCurrentRunMode` | `maeGetCurrentRunMode(?session session)` |
-| `maeGetJobControlMode` | `maeGetJobControlMode(?session session)` |
-| `maeGetSimulationMessages` | `maeGetSimulationMessages(?session session)` |
-
-### read_results — simulation results
-
-| Key | SKILL |
-|-----|-------|
-| `maeGetResultTests` | `maeGetResultTests()` |
-| `maeGetOutputValues` | SKILL loop: `maeGetOutputValue` + `maeGetSpecStatus` for each output |
-| `maeGetOverallSpecStatus` | `maeGetOverallSpecStatus()` |
-| `maeGetOverallYield` | `maeGetOverallYield(history)` |
-
-History name is auto-detected from `asiGetResultsDir`. Returns empty dict if no results.
-
-### export_waveform — download wave data
-
-| Python | SKILL / OCEAN |
-|--------|---------------|
-| `export_waveform(client, session, expression, local_path, *, analysis="ac", history="")` | `maeOpenResults` → `selectResults` → `ocnPrint` → `maeCloseResults` |
-
-For outputs that return `"wave"` instead of a scalar. Downloads the waveform as a text file (freq/time vs value).
+The library's stance: **raw SKILL output is the canonical format** —
+no Python-side alist→dict parsing.  ``snapshot()`` returns labeled
+SKILL probe outputs verbatim; consumers (AI / scripts) read SKILL
+alists directly, the same way they'd read XML or `.log` text.
 
 ```python
-session = open_session(client, "PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC")
+d = snapshot(client)
+# d = {
+#   "session": "fnxSessionN",       # davSession of focused window
+#   "app": "assembler",
+#   "lib": "...", "cell": "...", "view": "maestro",
+#   "mode": "Editing", "unsaved": False,
+#   "raw_sections": [
+#     ('ddGetObj("LIB")~>readPath',                          '"/home/.../LIB"'),
+#     ('maeGetSetup(?session "fnxSession18")',               '("TB_OTA")'),
+#     ('maeGetEnabledAnalysis("TB_OTA" ?session ...)',       '("ac" "dc" "noise")'),
+#     ('maeGetAnalysis("TB_OTA" "ac" ?session ...)',         '(("anaName" "ac") ...)'),
+#     ...
+#   ],
+# }
+```
 
-# Read config
-for key, (expr, raw) in read_config(client, session).items():
-    print(f"[{key}] {expr}")
-    print(raw)
+Each ``raw_sections`` tuple is **(actual SKILL string we ran, raw
+output)**.  The label IS the SKILL — no separate "function name" or
+"description".
 
-# Read env
-for key, (expr, raw) in read_env(client, session).items():
-    print(f"[{key}] {expr}")
-    print(raw)
+`snapshot()` always reads the **currently focused** maestro window
+(``hiGetCurrentWindow()``).  Click the window first, or call
+`open_session` / `open_gui_session` to bring one up.
 
-# Read results
-for key, (expr, raw) in read_results(client, session).items():
-    print(f"[{key}] {expr}")
-    print(raw)
+### Disk dump: `snapshot(client, output_root="...")`
 
-# Export waveform
+Adds the full disk dump on top of the same dict.  Layout:
+
+```
+{output_root}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/
+├── maestro.sdb                    raw Cadence sdb
+├── state_from_sdb.xml             YAML-filtered subset
+├── active.state                   raw per-test state
+├── state_from_active_state.xml    YAML-filtered + stale-test "tombstone" removal
+├── state_from_skill.txt           ~16 raw SKILL probe outputs in [label] value format
+└── {history_name}/                newest run
+    ├── {history_name}.log         OA library log
+    └── {point_subdir}/.../netlist/input.scs + psf/spectre.out + psf/logFile
+                                    per-point (all corners), packed via tar
+```
+
+The dict gains an ``output_dir`` field with the snapshot directory path.
+
+Filtered XMLs use ``src/virtuoso_bridge/resources/snapshot_filter.yaml``
+as the keep-list; edit that file to change which `<active>` children
+or `<Test>` components are retained.
+
+## Pure XML filters
+
+`maestro/reader/_parse_sdb.py`
+
+| Python | Input | Output |
+|--------|-------|--------|
+| `filter_sdb_xml(xml_text) → str` | raw `maestro.sdb` text | YAML-filtered XML (high-signal subset) |
+| `filter_active_state_xml(xml_text, *, valid_test_names=None) → str` | raw `active.state` text | YAML-filtered XML; `valid_test_names` drops "tombstone" `<Test>` blocks for tests that no longer exist in sdb's `<active><tests>` |
+
+Pure functions — no I/O, no client.  Useful when you've already
+pulled the XML to disk by other means.
+
+## Read — post-sim consumption
+
+`maestro/reader/runs.py`
+
+### read_results — scalar output values + spec status
+
+```python
+results = read_results(client, session, lib="myLib", cell="myTB")
+# {
+#   "history":       "Interactive.7",
+#   "tests":         ["TB_OTA", ...],
+#   "outputs":       [{"test", "name", "value", "spec_status"}, ...],
+#   "overall_spec":  "passed" | "failed" | None,
+#   "overall_yield": "100" | None,
+# }
+```
+
+GUI mode required (`maeOpenResults`).  Auto-detects latest valid
+history if `history=` not given.
+
+### export_waveform — OCEAN waveform export
+
+```python
 export_waveform(client, session,
     'dB20(mag(VF("/VOUT") / VF("/VSIN")))',
     "output/gain_db.txt", analysis="ac")
@@ -115,9 +154,10 @@ export_waveform(client, session,
 export_waveform(client, session,
     'getData("out" ?result "noise")',
     "output/noise.txt", analysis="noise")
-
-close_session(client, session)
 ```
+
+Calls `maeOpenResults` → `selectResults` → `ocnPrint` → `maeCloseResults`,
+then scp's the text file back.
 
 ## Write — Test
 

@@ -56,6 +56,48 @@ def _unwrap_errset(s: str) -> str:
     return s
 
 
+def brief_bundle(client: VirtuosoClient, *,
+                 sess: str, lib: str, cell: str, view: str) -> dict:
+    """One SKILL round-trip → just the 4 probes the CLI brief shows.
+
+    No env_options / sim_options / outputs / dir-listing / status —
+    those go in ``full_bundle`` for the disk dump.  Brief deliberately
+    only fetches what it prints (lib readPath, test name, enabled
+    analyses, per-analysis settings).
+
+    Returns ``{"raw_sections": [(label, raw_text), ...]}`` — same shape
+    as ``full_bundle``, just smaller.
+    """
+    if not sess:
+        return {"raw_sections": []}
+    expr = f'''
+list(
+  ddGetObj("{lib}")~>readPath
+  maeGetSetup(?session "{sess}")
+  maeGetEnabledAnalysis(car(maeGetSetup(?session "{sess}")) ?session "{sess}")
+  mapcar(lambda((a) maeGetAnalysis(car(maeGetSetup(?session "{sess}")) a ?session "{sess}"))
+         maeGetEnabledAnalysis(car(maeGetSetup(?session "{sess}")) ?session "{sess}"))
+)
+'''
+    r = client.execute_skill(expr)
+    s_lib, s_setup, s_enabled, s_analyses = _split_top_level(r.output or "", expected=4)
+
+    tests = _parse_skill_str_list(_unwrap_errset(s_setup))
+    test = tests[0] if tests else ""
+    enabled = _parse_skill_str_list(_unwrap_errset(s_enabled))
+
+    sections = [
+        (f'ddGetObj("{lib}")~>readPath',                          s_lib),
+        (f'maeGetSetup(?session "{sess}")',                       s_setup),
+        (f'maeGetEnabledAnalysis("{test}" ?session "{sess}")',    s_enabled),
+    ]
+    per_ana = _split_top_level(s_analyses, expected=len(enabled)) if enabled else []
+    for ana, raw in zip(enabled, per_ana):
+        sections.append(
+            (f'maeGetAnalysis("{test}" "{ana}" ?session "{sess}")', raw))
+    return {"raw_sections": sections}
+
+
 # ---------------------------------------------------------------------------
 # Probes
 # ---------------------------------------------------------------------------

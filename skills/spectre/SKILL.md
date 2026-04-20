@@ -57,8 +57,6 @@ result = t1.result()                     # block on one
 results = SpectreSimulator.wait_all([t1, t2])  # or wait for batch
 ```
 
-CLI monitoring: `virtuoso-bridge sim-jobs` (shows user@host, CPU/MEM, timing) and `virtuoso-bridge sim-cancel <id>`.
-
 ## Simulation modes
 
 ```python
