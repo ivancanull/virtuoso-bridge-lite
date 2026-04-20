@@ -109,6 +109,33 @@ client.execute_skill("1+2")  # VirtuosoResult(status=SUCCESS, output='3')
 
 For detailed setup (jump hosts, multi-profile, local mode), see [`AGENTS.md`](AGENTS.md).
 
+## Exposing skills to your coding agent
+
+The `skills/` directory ships [Claude Code](https://claude.com/claude-code) skills
+(`virtuoso`, `spectre`, `optimizer`). They are **not** symlinked into the repo's
+`.claude/skills/` on purpose — repo-tracked symlinks break on Windows and hardcode
+one user's absolute paths. Instead, each user links them into their own
+`~/.claude/skills/` once after cloning:
+
+```bash
+# macOS / Linux
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/skills/virtuoso"  ~/.claude/skills/virtuoso
+ln -s "$(pwd)/skills/spectre"   ~/.claude/skills/spectre
+ln -s "$(pwd)/skills/optimizer" ~/.claude/skills/optimizer
+```
+
+```powershell
+# Windows (PowerShell, Developer Mode or elevated shell)
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\virtuoso"  -Target "$PWD\skills\virtuoso"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\spectre"   -Target "$PWD\skills\spectre"
+New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.claude\skills\optimizer" -Target "$PWD\skills\optimizer"
+```
+
+Cursor and other agents that load skills from a user-level directory follow the
+same pattern — point their skills path at `skills/` in this repo.
+
 ## Architecture
 
 <p align="center">
