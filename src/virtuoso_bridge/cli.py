@@ -6,6 +6,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import shlex
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -391,32 +392,36 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
             return
         runner._verbose = False
 
-        # 1. Direct check — works if spectre is already on PATH
+        # 1. Direct check — works if spectre is already on PATH.
+        # Wrap in `bash -c` so the command is interpreted by bash even
+        # when the remote user's login shell is csh/tcsh (sshd may
+        # invoke the login shell instead of honouring our `sh` target
+        # on some setups).
         result = runner.run_command(
-            "which spectre 2>/dev/null && spectre -V 2>&1 | head -1",
+            "bash -c 'which spectre 2>/dev/null && spectre -V 2>&1 | head -1'",
             timeout=10,
         )
         stdout = result.stdout.strip()
 
-        # 2. Fallback — source VB_CADENCE_CSHRC to set up PATH
+        # 2. Fallback — source VB_CADENCE_CSHRC to set up PATH.
         if not stdout:
             cadence_cshrc = (
                 os.getenv(f"VB_CADENCE_CSHRC{suffix}", "").strip()
                 or os.getenv("VB_CADENCE_CSHRC", "").strip()
             )
             if cadence_cshrc:
-                check_cmd = (
-                    "cat > /tmp/_vb_spectre_check.csh << 'EOFCSH'\n"
-                    "#!/bin/csh -f\n"
-                    'if (! $?HOSTNAME) setenv HOSTNAME `hostname`\n'
-                    'if (! $?LD_LIBRARY_PATH) setenv LD_LIBRARY_PATH ""\n'
-                    f"source {cadence_cshrc}\n"
-                    "which spectre\n"
-                    "spectre -V\n"
-                    "EOFCSH\n"
-                    "csh -f /tmp/_vb_spectre_check.csh 2>&1 | head -5; "
-                    "rm -f /tmp/_vb_spectre_check.csh"
+                # Build the csh script body then pass to `csh -c` via
+                # shlex.quote so the outer bash doesn't interpret csh's
+                # `!` / backticks / `$?VAR` before csh sees them.
+                csh_script = (
+                    'if (! $?HOSTNAME) setenv HOSTNAME `hostname`; '
+                    'if (! $?LD_LIBRARY_PATH) setenv LD_LIBRARY_PATH ""; '
+                    f'source {cadence_cshrc}; '
+                    'which spectre; '
+                    'spectre -V'
                 )
+                inner = f"csh -f -c {shlex.quote(csh_script)} 2>&1 | head -5"
+                check_cmd = f"bash -c {shlex.quote(inner)}"
                 result = runner.run_command(check_cmd, timeout=15)
                 stdout = result.stdout.strip()
 
