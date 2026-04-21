@@ -191,12 +191,23 @@ class SSHRunner:
 
         # ControlMaster socket path for SSH connection multiplexing.
         # All ssh/scp calls to the same host reuse one TCP connection.
-        # Disabled on Windows: Windows OpenSSH does not support Unix domain
-        # sockets required by ControlMaster.  Users can also force-disable
-        # via VB_DISABLE_CONTROL_MASTER=1.
+        #
+        # Enabled by default on every OS.  Modern Windows 10/11 OpenSSH
+        # (8.1+) supports ControlMaster via named-pipe ControlPath, so
+        # there is no platform reason to opt out.  Historically this
+        # was default-disabled on Windows after one user hit a WSL-
+        # specific "getsockname failed: Not a socket" error; that
+        # disable was overly broad and cost every Windows user the
+        # multiplexing speedup — fresh ssh / scp calls against a slow
+        # remote (lab PAM stack, heavy load) would take 10-30 s per
+        # handshake, making `status` / snapshot / cell copies look
+        # hung.
+        #
+        # If you actually hit a ControlMaster-related error on your
+        # platform, set VB_DISABLE_CONTROL_MASTER=1.
         _disable_cm = os.environ.get("VB_DISABLE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
         _force_cm = os.environ.get("VB_FORCE_CONTROL_MASTER", "").strip().lower() in ("1", "true", "yes")
-        self._use_control_master = _force_cm or ((os.name != "nt") and (not _disable_cm))
+        self._use_control_master = _force_cm or (not _disable_cm)
 
         _user_part = user or "default"
         _tmp = tempfile.gettempdir()
