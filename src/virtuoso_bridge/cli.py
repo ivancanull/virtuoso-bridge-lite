@@ -425,7 +425,13 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
         else:
             combined = fast
         check_cmd = f"bash -c {shlex.quote(combined)}"
-        result = runner.run_command(check_cmd, timeout=15)
+        # Remote sshd handshake can be 10-25 s on shared lab machines
+        # (slow PAM stack, load, etc.).  Inform the user we're working
+        # so "status" doesn't look frozen, and give the probe enough
+        # time budget to survive the worst observed handshake.
+        print("\n[spectre] probing (up to 60 s — single SSH round-trip)...",
+              flush=True)
+        result = runner.run_command(check_cmd, timeout=60)
         stdout = result.stdout.strip()
 
         spectre_path = None
@@ -438,14 +444,14 @@ def _print_spectre_status(profile: str | None, suffix: str) -> None:
                 spectre_path = line
 
         if spectre_path:
-            print(f"\n[spectre] OK")
+            print(f"[spectre] OK")
             print(f"  path    : {spectre_path}")
             if version:
                 print(f"  version : {version}")
         else:
-            print(f"\n[spectre] NOT FOUND")
+            print(f"[spectre] NOT FOUND")
     except Exception as e:
-        print(f"\n[spectre] error: {e}")
+        print(f"[spectre] error: {e}")
     finally:
         if ssh is not None:
             ssh.close()
