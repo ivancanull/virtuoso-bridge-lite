@@ -19,7 +19,7 @@ import yaml
 
 
 _DEFAULT_FILTER_PATH = (
-    Path(__file__).resolve().parents[4] / "resources" / "snapshot_filter.yaml"
+    Path(__file__).resolve().parents[1] / "snapshot_filter.yaml"
 )
 
 
