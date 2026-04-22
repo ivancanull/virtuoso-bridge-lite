@@ -226,9 +226,18 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
         ])
     extras_str = " ".join(maestro_extras)
 
+    # Include symlinks: Cadence's per-point netlist/ is largely symlinks
+    # pointing into ``psf/.../netlist/`` (netlist itself, map, amap,
+    # ihnl, designInfo, netlistHeader/Footer, ...).  ``-type f`` alone
+    # would drop every one of them — including the main ``netlist``
+    # file.  Match symlinks too, and pass ``-h`` to tar so the archive
+    # stores the symlink target's contents under the symlink's name
+    # (safer than preserving the link on the client, whose directory
+    # layout wouldn't satisfy the relative target).
     tar_cmd = (
-        f"find {hist_remote} -type f \\( {clauses} \\) -print 2>/dev/null "
-        f"| tar -cf {remote_tar} -P -T - --ignore-failed-read "
+        f"find {hist_remote} \\( -type f -o -type l \\) \\( {clauses} \\) "
+        f"-print 2>/dev/null "
+        f"| tar -chf {remote_tar} -P -T - --ignore-failed-read "
         f"{extras_str} 2>/dev/null && echo OK"
     )
     r = runner.run_command(tar_cmd, timeout=30)
@@ -244,7 +253,29 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
         hist_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(local_tar) as tf:
             for m in tf.getmembers():
-                if not m.isfile():
+                # GNU tar folds the second-and-onwards copies of the
+                # same inode into *hard link* entries pointing at the
+                # first copy (happens here because the per-point
+                # netlist/ dir is almost entirely symlinks into a
+                # shared psf/.../netlist/; with --dereference the
+                # first path archived wins and every other path
+                # becomes a hrw-... hard-link row).  tarfile.isfile()
+                # returns False for those rows, so naive code silently
+                # drops the main netlist file along with map / amap /
+                # ihnl / designInfo / netlistHeader / netlistFooter /
+                # statAlters.  Resolve linkname back to the anchor
+                # member and copy its bytes out under *this* member's
+                # path.
+                if m.isfile():
+                    payload = m
+                elif m.islnk():
+                    try:
+                        payload = tf.getmember(m.linkname)
+                    except KeyError:
+                        continue
+                    if not payload.isfile():
+                        continue
+                else:
                     continue
                 # Map remote absolute path → local relative path under
                 # snap_dir/<history>/.  Maestro-level ``<history>.log``
@@ -260,7 +291,7 @@ def _dump_run_artifacts(client: VirtuosoClient, snap_dir: Path, *,
                 else:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                src = tf.extractfile(m)
+                src = tf.extractfile(payload)
                 if src is None:
                     continue
                 with src, open(target, "wb") as dst:
