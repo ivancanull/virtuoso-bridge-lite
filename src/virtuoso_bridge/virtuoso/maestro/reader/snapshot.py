@@ -329,7 +329,8 @@ def _dump_to_dir(client: VirtuosoClient, *, bundle: dict, lib: str, cell: str,
 # ---------------------------------------------------------------------------
 
 def snapshot(client: VirtuosoClient, *,
-             output_root: str | None = None) -> dict:
+             output_root: str | None = None,
+             history: str | None = None) -> dict:
     """Snapshot the focused maestro session.
 
     Returns a minimal dict.  ``raw_sections`` is the canonical setup
@@ -351,6 +352,11 @@ def snapshot(client: VirtuosoClient, *,
     With ``output_root="..."`` also writes the full disk dump to
     ``{output_root}/{YYYYMMDD_HHMMSS}__{lib}__{cell}/`` (raw + filtered
     XMLs, ``state_from_skill.txt``, newest-run artifacts).
+
+    *history*:  when given, the disk dump targets that specific history
+    name (e.g. ``"Interactive.160"``) instead of the mtime / current-
+    history auto-pick.  Useful for pulling older runs side-by-side.
+    Only meaningful with ``output_root``.
     """
     win  = _fetch_window_state(client)
     sess = win["session"]
@@ -379,18 +385,23 @@ def snapshot(client: VirtuosoClient, *,
     if output_root is not None:
         if not sess:
             raise RuntimeError("No focused maestro window.")
-        # Pick "latest history" — prefer mtime, because the user's
-        # intuition of "newest" is "what I last ran", not "what the GUI
-        # result panel happens to have loaded".  axlGetCurrentHistory
-        # sticks to an earlier Explorer run when the user has since
-        # launched an Interactive sim without re-loading its results;
-        # mtime reflects the actual latest run on disk.
+        # If the caller pinned a specific history (--history CLI flag),
+        # use it verbatim — skip the auto-pick.  Otherwise fall back to
+        # the mtime-first resolution below.
+        #
+        # Auto-pick order (when history is None):
+        # Prefer mtime, because the user's intuition of "newest" is
+        # "what I last ran", not "what the GUI result panel happens to
+        # have loaded".  axlGetCurrentHistory sticks to an earlier
+        # Explorer run when the user has since launched an Interactive
+        # sim without re-loading its results; mtime reflects the actual
+        # latest run on disk.
         #
         # Fallbacks in order:
         #   1. Disk mtime — newest-modified history files win.
         #   2. Session's currently-loaded history (axlGetCurrentHistory~>name).
         #   3. Natural sort by name.
-        latest_history = (
+        latest_history = history or (
             (sort_histories_by_mtime(bundle.get("hist_files_mtime") or [])
              or [None])[0] or
             bundle.get("current_history") or

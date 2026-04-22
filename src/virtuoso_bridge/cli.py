@@ -653,6 +653,7 @@ _SCREENSHOT_TARGET: list[str] = ["ciw"]
 _SNAPSHOT_OPTS: dict = {
     "output_root": None,
     "json":        False,
+    "history":     None,
 }
 
 
@@ -763,7 +764,11 @@ def cli_snapshot() -> int:
             print(f"[{kind}] {title}", file=sys.stderr)
             print(f"-o ROOT only supports maestro for now.", file=sys.stderr)
             return 1
-        result = _maestro_snapshot(client, output_root=opts["output_root"])
+        result = _maestro_snapshot(
+            client,
+            output_root=opts["output_root"],
+            history=opts.get("history"),
+        )
         hist = result.get("latest_history") or ""
         if hist:
             print(f"[snapshot] history: {hist}")
@@ -905,6 +910,10 @@ def build_parser() -> argparse.ArgumentParser:
                               "Without -o, prints a brief summary to stdout.")
     sp_snap.add_argument("--json", action="store_true",
                          help="Print full snapshot dict as JSON to stdout (overrides default brief)")
+    sp_snap.add_argument("--history", default=None,
+                         help="Pin to a specific maestro history (e.g. Interactive.160). "
+                              "Skips the mtime/current-history auto-pick. "
+                              "Only meaningful with -o.")
     sp_snap.add_argument("-p", "--profile", default=None,
                          help="Connection profile")
     sp_snap.add_argument("--env", default=None,
