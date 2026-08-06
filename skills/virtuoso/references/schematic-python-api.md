@@ -64,6 +64,8 @@ Use these with `sch.add(...)`:
 | `schematic_create_wire_between_instance_terms(from_inst, from_term, to_inst, to_term)` | `schCreateWire` between terminal centers | Wire two terminals |
 | `schematic_label_instance_term(inst, term, net)` | Wire stub + label | Label terminal |
 | `schematic_create_net_stub(net, x, y, *, direction, length)` | wire + `schCreateWireLabel` | Short named electrical connection |
+| `schematic_rename_net(old_name, new_name)` | `dbRenameNet` | Rename one net without changing terminals |
+| `schematic_rename_port(old_name, new_name, *, rename_attached_net)` | `dbRenameNet` + terminal name update | Rename a port and, by default, its same-named net |
 | `schematic_create_net_expression(net, expression, x, y)` | `schCreateNetExpression` | Attach inherited-connection expression |
 | `schematic_set_netset_property(instance, property, net)` | `dbReplaceProp` | Set an inherited-connection override |
 
@@ -110,3 +112,36 @@ For format and `spiceIn` limitations, see [netlist.md](netlist.md).
 `add_wire_between_instance_terms` and `add_net_label_to_instance_term` resolve pin positions from the database — no need to guess coordinates.
 
 `add_net_label_to_transistor` is MOS-aware: it knows drain/source go up/down (flipped for PMOS), gate goes left, body goes right. The stub direction adapts to the transistor orientation.
+
+## Rename nets and ports
+
+Use `schematic_rename_net` for an internal electrical net. It deliberately
+leaves terminal names unchanged:
+
+```python
+from virtuoso_bridge.virtuoso.schematic import schematic_rename_net
+
+with client.schematic.modify("myLib", "myCell") as sch:
+    sch.add(schematic_rename_net("NX", "CASCODE_NODE"))
+```
+
+Use `schematic_rename_port` for a cell interface. A schematic port is a
+terminal attached to a net, so the helper renames both when their source names
+match:
+
+```python
+from virtuoso_bridge.virtuoso.schematic import schematic_rename_port
+
+with client.schematic.modify("myLib", "myCell") as sch:
+    sch.add(schematic_rename_port("VOUT", "IOUT"))
+```
+
+Both helpers reject missing sources and destination-name collisions rather
+than merging objects. `schematic_rename_port(..., rename_attached_net=False)`
+renames only the terminal when a deliberate terminal/net name mismatch is
+required. Pin figures remain attached to the renamed terminal; their separate
+pin-object names are not rewritten.
+
+This edits only the selected schematic cellview. It does not rename terminals
+in a separate symbol view; update or regenerate that symbol explicitly when
+the cell already has one.

@@ -2,12 +2,82 @@ from __future__ import annotations
 
 import pytest
 
+from virtuoso_bridge.virtuoso import schematic as schematic_api
 from virtuoso_bridge.virtuoso.schematic.ops import (
     schematic_create_net_stub,
     schematic_create_net_expression,
     schematic_label_instance_term,
+    schematic_rename_net,
+    schematic_rename_port,
     schematic_set_netset_property,
 )
+
+
+def test_schematic_rename_builders_are_public() -> None:
+    assert schematic_api.schematic_rename_net is schematic_rename_net
+    assert schematic_api.schematic_rename_port is schematic_rename_port
+    assert "schematic_rename_net" in schematic_api.__all__
+    assert "schematic_rename_port" in schematic_api.__all__
+
+
+def test_schematic_rename_net_renames_only_the_net() -> None:
+    skill = schematic_rename_net("NX", "CASCODE_NODE")
+
+    assert 'rbOldNet = dbFindNetByName(cv "NX")' in skill
+    assert 'dbFindNetByName(cv "CASCODE_NODE")' in skill
+    assert 'dbRenameNet(rbOldNet "CASCODE_NODE")' in skill
+    assert "dbFindTermByName" not in skill
+    assert "~>name =" not in skill
+
+
+def test_schematic_rename_port_renames_terminal_and_same_named_net() -> None:
+    skill = schematic_rename_port("VOUT", "IOUT")
+
+    assert 'rbOldTerm = dbFindTermByName(cv "VOUT")' in skill
+    assert 'dbFindTermByName(cv "IOUT")' in skill
+    assert "rbOldNet = rbOldTerm~>net" in skill
+    assert 'rbOldNet~>name == "VOUT"' in skill
+    assert 'dbFindNetByName(cv "IOUT")' in skill
+    assert 'dbRenameNet(rbOldNet "IOUT")' in skill
+    assert 'rbOldTerm~>name = "IOUT"' in skill
+
+
+def test_schematic_rename_port_can_leave_attached_net_unchanged() -> None:
+    skill = schematic_rename_port("VOUT", "IOUT", rename_attached_net=False)
+
+    assert 'rbOldTerm = dbFindTermByName(cv "VOUT")' in skill
+    assert 'rbOldTerm~>name = "IOUT"' in skill
+    assert "dbFindNetByName" not in skill
+    assert "dbRenameNet" not in skill
+
+
+def test_schematic_rename_helpers_escape_names_and_cellview_expression() -> None:
+    net_skill = schematic_rename_net('A"OLD', "B\\NEW", cv_expr="targetCv")
+    port_skill = schematic_rename_port('P"OLD', "P\\NEW", cv_expr="targetCv")
+
+    assert 'dbFindNetByName(targetCv "A\\"OLD")' in net_skill
+    assert 'dbRenameNet(rbOldNet "B\\\\NEW")' in net_skill
+    assert 'dbFindTermByName(targetCv "P\\"OLD")' in port_skill
+    assert 'rbOldTerm~>name = "P\\\\NEW"' in port_skill
+
+
+@pytest.mark.parametrize(
+    ("old_name", "new_name", "message"),
+    [
+        ("", "NEW", "must be non-empty"),
+        ("OLD", "", "must be non-empty"),
+        ("SAME", "SAME", "must differ"),
+    ],
+)
+def test_schematic_rename_helpers_reject_invalid_names(
+    old_name: str,
+    new_name: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        schematic_rename_net(old_name, new_name)
+    with pytest.raises(ValueError, match=message):
+        schematic_rename_port(old_name, new_name)
 
 
 def test_schematic_create_net_expression_attaches_expression_to_net_wire() -> None:

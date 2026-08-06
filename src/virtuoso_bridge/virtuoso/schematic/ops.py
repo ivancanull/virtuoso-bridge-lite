@@ -11,6 +11,82 @@ from virtuoso_bridge.virtuoso.ops import (
     skill_point_list,
 )
 
+
+def _validate_rename_names(old_name: str, new_name: str) -> None:
+    if not old_name or not new_name:
+        raise ValueError("old_name and new_name must be non-empty")
+    if old_name == new_name:
+        raise ValueError("old_name and new_name must differ")
+
+
+def schematic_rename_net(
+    old_name: str,
+    new_name: str,
+    *,
+    cv_expr: str = "cv",
+) -> str:
+    """Build SKILL to rename one net without changing its terminal names."""
+    _validate_rename_names(old_name, new_name)
+    escaped_old = escape_skill_string(old_name)
+    escaped_new = escape_skill_string(new_name)
+    return (
+        "let((rbOldNet) "
+        f'rbOldNet = dbFindNetByName({cv_expr} "{escaped_old}") '
+        'unless(rbOldNet error("source net not found")) '
+        f'when(dbFindNetByName({cv_expr} "{escaped_new}") '
+        'error("destination net already exists")) '
+        f'unless(dbRenameNet(rbOldNet "{escaped_new}") '
+        'error("dbRenameNet failed")) '
+        "rbOldNet)"
+    )
+
+
+def schematic_rename_port(
+    old_name: str,
+    new_name: str,
+    *,
+    rename_attached_net: bool = True,
+    cv_expr: str = "cv",
+) -> str:
+    """Build SKILL to rename a terminal and, by default, its same-named net.
+
+    A schematic port is represented by a terminal attached to a net. When
+    ``rename_attached_net`` is true, the source terminal and its net must share
+    ``old_name``; destination terminal and net collisions are rejected. This
+    operation does not modify terminals in separate views such as a symbol.
+    """
+    _validate_rename_names(old_name, new_name)
+    escaped_old = escape_skill_string(old_name)
+    escaped_new = escape_skill_string(new_name)
+
+    if rename_attached_net:
+        net_skill = (
+            'rbOldNet = rbOldTerm~>net '
+            'unless(rbOldNet error("source terminal has no attached net")) '
+            f'unless(rbOldNet~>name == "{escaped_old}" '
+            'error("source terminal and attached net names differ")) '
+            f'when(dbFindNetByName({cv_expr} "{escaped_new}") '
+            'error("destination net already exists")) '
+            f'unless(dbRenameNet(rbOldNet "{escaped_new}") '
+            'error("dbRenameNet failed")) '
+        )
+        variables = "rbOldTerm rbOldNet"
+    else:
+        net_skill = ""
+        variables = "rbOldTerm"
+
+    return (
+        f"let(({variables}) "
+        f'rbOldTerm = dbFindTermByName({cv_expr} "{escaped_old}") '
+        'unless(rbOldTerm error("source terminal not found")) '
+        f'when(dbFindTermByName({cv_expr} "{escaped_new}") '
+        'error("destination terminal already exists")) '
+        f"{net_skill}"
+        f'rbOldTerm~>name = "{escaped_new}" '
+        "rbOldTerm)"
+    )
+
+
 def schematic_create_inst(
     master_expr: str,
     instance_name: str,
