@@ -121,8 +121,10 @@ def _send_x11_alt_n(runner) -> None:
 # Cellview memory management
 # ---------------------------------------------------------------------------
 
-def _purge_maestro_cellviews(client: VirtuosoClient, *, timeout: int = 60) -> None:
-    """Purge all maestro cellviews from Virtuoso's virtual memory.
+def _purge_maestro_cellviews(
+    client: VirtuosoClient, *, view: str = "maestro", timeout: int = 60
+) -> None:
+    """Purge one named Maestro cellview from Virtuoso's virtual memory.
 
     After hiCloseWindow + maeCloseSession, the cellview may still be
     cached in memory with an internal edit lock. dbPurge forces it out,
@@ -130,9 +132,9 @@ def _purge_maestro_cellviews(client: VirtuosoClient, *, timeout: int = 60) -> No
     """
     client.execute_skill('''
 foreach(cv dbGetOpenCellViews()
-  when(cv~>viewName == "maestro"
+  when(cv~>viewName == "{}"
     errset(dbPurge(cv))))
-''', timeout=timeout)
+'''.format(view), timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -212,15 +214,17 @@ def _close_background_sessions(client: VirtuosoClient) -> list[str]:
 # Background session (read/write config only)
 # ---------------------------------------------------------------------------
 
-def open_session(client: VirtuosoClient, lib: str, cell: str) -> str:
-    """Open maestro in background via maeOpenSetup. Returns session string."""
+def open_session(client: VirtuosoClient, lib: str, cell: str, *, view: str = "maestro") -> str:
+    """Open one named Maestro view in background via maeOpenSetup."""
+    if not view:
+        raise ValueError("Maestro view must be nonempty")
     r = client.execute_skill(
-        f'let((session) session = maeOpenSetup("{lib}" "{cell}" "maestro") '
-        f'printf("[%s maeOpenSetup] %s/%s  session=%s\\n" nth(2 parseString(getCurrentTime())) "{lib}" "{cell}" session) '
+        f'let((session) session = maeOpenSetup("{lib}" "{cell}" "{view}") '
+        f'printf("[%s maeOpenSetup] %s/%s/%s  session=%s\\n" nth(2 parseString(getCurrentTime())) "{lib}" "{cell}" "{view}" session) '
         f'session)')
     session = (r.output or "").strip('"')
     if not session or session in ("nil", "t"):
-        raise RuntimeError(f"maeOpenSetup failed for {lib}/{cell}")
+        raise RuntimeError(f"maeOpenSetup failed for {lib}/{cell}/{view}")
     return session
 
 
@@ -268,21 +272,27 @@ let((result)
     return None
 
 
-def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
+def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str, view: str
                            ) -> str | None:
-    """Return the GUI session string whose ADE window is for ``lib``/``cell``.
+    """Return the GUI session string for one explicit ``lib``/``cell``/``view``.
 
     Unlike :func:`find_open_session`, this does not require the maestro
     to contain any tests — useful right after ``deOpenCellView`` opens
     a fresh / empty view.  Matches by window title, which contains
-    both the library and cell names for ADE Assembler / Explorer.
+    the library, cell, and view names for ADE Assembler / Explorer.
 
     Returns ``None`` if no matching window is found.
     """
     for w in _get_session_windows(client):
-        if lib in w["title"] and cell in w["title"]:
+        if _window_matches_target(w, lib, cell, view):
             return w["session"]
     return None
+
+
+def _window_matches_target(window: dict, lib: str, cell: str, view: str) -> bool:
+    """Match the explicit ADE title suffix, including its saved view name."""
+    title = str(window["title"]).rstrip().rstrip("*").rstrip()
+    return title.endswith(" {} {} {}".format(lib, cell, view))
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +300,8 @@ def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
 # ---------------------------------------------------------------------------
 
 def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
-                     *, timeout: int = 60) -> str:
-    """Open maestro in GUI mode, ready for simulation. Returns session string.
+                     *, view: str = "maestro", timeout: int = 60) -> str:
+    """Open one named Maestro view in GUI mode, ready for simulation.
 
     Handles all edge cases safely:
     1. Closes any background sessions (they hold lock files)
@@ -306,6 +316,9 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
 
     Returns the session string (e.g. "fnxSession3").
     """
+    if not view:
+        raise ValueError("Maestro view must be nonempty")
+
     # Step 1: close background sessions
     closed_bg = _close_background_sessions(client)
     if closed_bg:
@@ -316,7 +329,7 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
 
     for w in windows:
         title = w["title"]
-        is_target = (lib in title and cell in title)
+        is_target = _window_matches_target(w, lib, cell, view)
 
         if is_target and w["mode"] == "editing":
             # Already editable for our cell — reuse
@@ -327,36 +340,36 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
         # - for a different cell (must release edit lock)
         # - for our cell but in reading mode
         logger.info("Closing session %s (%s, target=%s)", w["session"], w["mode"], is_target)
-        close_gui_session(client, w["session"], save=(w["mode"] == "editing"))
+        close_gui_session(client, w["session"], save=(w["mode"] == "editing"), view=view)
 
     # Step 3: open in editable mode.
     # deOpenCellView with mode "a" opens editable. From a clean state
     # (no residual sessions), this opens Assembler by default.
     # Do NOT call maeOpenSetup afterwards — it creates a second
     # background session with its own lock, causing 8127 on next open.
-    logger.info("Opening GUI (editable): %s/%s/maestro", lib, cell)
+    logger.info("Opening GUI (editable): %s/%s/%s", lib, cell, view)
     r = client.execute_skill(
-        f'deOpenCellView("{lib}" "{cell}" "maestro" "maestro" nil "a")',
+        f'deOpenCellView("{lib}" "{cell}" "{view}" "maestro" nil "a")',
         timeout=timeout)
     if r.errors or not r.output or r.output.strip() in ("nil", ""):
-        raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/maestro: {r.errors}")
+        raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/{view}: {r.errors}")
 
     # Find the new session by matching the cell we just opened.  Do not
     # use find_open_session here — it filters on maeGetSetup, so a fresh
     # / empty maestro (no tests yet) is invisible to it and would surface
     # as a misleading "No session found after opening GUI".
-    session = _find_session_for_cell(client, lib, cell)
+    session = _find_session_for_cell(client, lib, cell, view)
     if not session:
         raise RuntimeError(
-            f"No ADE window for {lib}/{cell} after deOpenCellView — "
+            f"No ADE window for {lib}/{cell}/{view} after deOpenCellView — "
             "the call returned but no matching window appeared; check "
-            f"that {cell!r} actually has a 'maestro' view in library {lib!r}")
+            f"that {cell!r} actually has a {view!r} view in library {lib!r}")
     logger.info("Opened GUI session: %s", session)
     return session
 
 
 def close_gui_session(client: VirtuosoClient, session: str,
-                      save: bool = True, *, timeout: int = 60) -> None:
+                      save: bool = True, *, view: str = "maestro", timeout: int = 60) -> None:
     """Close a GUI maestro session safely.
 
     Checks window state before closing:
@@ -371,6 +384,7 @@ def close_gui_session(client: VirtuosoClient, session: str,
     Args:
         save: if True and session has unsaved changes, attempt to
               save before closing. If False, always discard changes.
+        view: saved Maestro view to purge after close.
         timeout: budget (seconds) for each blocking SKILL call in the
               close path (maeMakeEditable, hiCloseWindow, dbPurge).
               Default 60s; previously hard-coded 10-15s, which was
@@ -417,7 +431,7 @@ def close_gui_session(client: VirtuosoClient, session: str,
     # Purge cellview from memory to release internal edit lock.
     # Without this, deOpenCellView("a") on another cell may fail with
     # ASSEMBLER-8127 even after hiCloseWindow + maeCloseSession.
-    _purge_maestro_cellviews(client, timeout=timeout)
+    _purge_maestro_cellviews(client, view=view, timeout=timeout)
     logger.info("Closed GUI session: %s", session)
 
 

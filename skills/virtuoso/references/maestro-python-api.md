@@ -37,12 +37,12 @@ See **[simulation-flow.md](simulation-flow.md)** for the complete 8-step guide (
 
 | Python | SKILL | Description |
 |--------|-------|-------------|
-| `client.maestro.open_session(lib, cell) -> str` | `maeOpenSetup` | Background open, returns session string |
+| `client.maestro.open_session(lib, cell, *, view="maestro") -> str` | `maeOpenSetup` | Background open of one named view, returns session string |
 | `client.maestro.close_session(session)` | `maeCloseSession` | Background close |
 | `client.maestro.find_open_session() -> str \| None` | `maeGetSessions` + `maeGetSetup` | Find first active session with valid test |
-| `client.maestro.open_gui_session(lib, cell, *, timeout=60) -> str` | `deOpenCellView` + `maeMakeEditable` | GUI open (required for simulation) |
-| `client.maestro.close_gui_session(session, save=True, *, timeout=60)` | `hiCloseWindow` (+ `maeMakeEditable`/`dbPurge` as needed) | GUI close |
-| `client.maestro.purge_maestro_cellviews(*, timeout=60)` | `dbPurgeCellView` | Clean stale internal locks before opening |
+| `client.maestro.open_gui_session(lib, cell, *, view="maestro", timeout=60) -> str` | `deOpenCellView` + `maeMakeEditable` | GUI open of one named view (required for simulation) |
+| `client.maestro.close_gui_session(session, save=True, *, view="maestro", timeout=60)` | `hiCloseWindow` (+ `maeMakeEditable`/`dbPurge` as needed) | GUI close and named-view purge |
+| `client.maestro.purge_maestro_cellviews(*, view="maestro", timeout=60)` | `dbPurgeCellView` | Clean stale locks for one named view before opening |
 
 ```python
 session = client.maestro.open_session("PLAYGROUND_AMP", "TB_AMP_5T_D2S_DC_AC")
