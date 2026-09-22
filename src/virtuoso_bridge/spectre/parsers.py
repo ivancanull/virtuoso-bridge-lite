@@ -366,7 +366,10 @@ def _parse_psf_swept_data(
             m_sig = re.match(r'"([^"]+)"\s+"[^"]*"', stripped)
             if m_sig:
                 sig_name = m_sig.group(1)
-                trace_names.append(sig_name)
+                # Explicit saves can duplicate a public trace when save=allpub.
+                # One state vector per signal is sufficient for delta expansion.
+                if sig_name not in trace_names:
+                    trace_names.append(sig_name)
                 if current_group is not None:
                     group_to_name[current_group] = sig_name
                 current_group = None

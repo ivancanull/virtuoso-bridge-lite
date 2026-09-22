@@ -117,6 +117,32 @@ END
     assert parsed["VO"] == [complex(1.0, 0.0), complex(0.5, -0.5)]
 
 
+def test_swept_duplicate_trace_is_one_vector_per_signal():
+    """save=allpub plus an explicit save must not double every sample."""
+    text = """\
+HEADER
+SWEEP
+"freq" 1
+TRACE
+"OUT" "V"
+"OUT" "V"
+VALUE
+"freq" 1e9
+"OUT" (1 0)
+"OUT" (1 0)
+"freq" 2e9
+"OUT" (2 0)
+"OUT" (2 0)
+END
+"""
+    lines = text.splitlines()
+    parsed = _parse_psf_swept_data(
+        lines, len(lines), {"HEADER": 0, "SWEEP": 1, "TRACE": 3, "VALUE": 6, "END": 13}
+    )
+    assert parsed["freq"] == [1e9, 2e9]
+    assert parsed["OUT"] == [complex(1, 0), complex(2, 0)]
+
+
 # ---------------------------------------------------------------------------
 # parse_sweep_psf_directory — both layouts
 # ---------------------------------------------------------------------------
