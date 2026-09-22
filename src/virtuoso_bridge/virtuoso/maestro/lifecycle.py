@@ -214,10 +214,18 @@ def _close_background_sessions(client: VirtuosoClient) -> list[str]:
 # Background session (read/write config only)
 # ---------------------------------------------------------------------------
 
-def open_session(client: VirtuosoClient, lib: str, cell: str) -> str:
-    """Open maestro in background via maeOpenSetup. Returns session string."""
+def open_session(client: VirtuosoClient, lib: str, cell: str, mode: str = "a",
+                 *, view: str = "maestro") -> str:
+    """Open Maestro in background via ``maeOpenSetup``.
+
+    ``mode="r"`` is needed when another ADE window already owns the
+    cellview in editable mode; it permits readback without competing for the
+    edit lock.
+    """
+    if mode not in {"a", "r"}:
+        raise ValueError("Maestro session mode must be 'a' or 'r'")
     r = client.execute_skill(
-        f'let((session) session = maeOpenSetup("{lib}" "{cell}" "maestro") '
+        f'let((session) session = maeOpenSetup("{lib}" "{cell}" "{view}" ?mode "{mode}") '
         f'printf("[%s maeOpenSetup] %s/%s  session=%s\\n" nth(2 parseString(getCurrentTime())) "{lib}" "{cell}" session) '
         f'session)')
     session = (r.output or "").strip('"')

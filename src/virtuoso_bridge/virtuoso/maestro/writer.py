@@ -617,11 +617,11 @@ def migrate_adexl_to_maestro(client: VirtuosoClient, lib: str, cell: str,
 # ---------------------------------------------------------------------------
 
 def save_setup(client: VirtuosoClient, lib: str, cell: str, *,
-               session: str = "") -> str:
+               session: str = "", view: str = "maestro") -> str:
     """maeSaveSetup — save the maestro setup to disk."""
     s = f' ?session "{session}"' if session else ""
     return _q(client,
-        f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "maestro"{s})')
+        f'maeSaveSetup(?lib "{lib}" ?cell "{cell}" ?view "{view}"{s})')
 
 
 # ---------------------------------------------------------------------------
