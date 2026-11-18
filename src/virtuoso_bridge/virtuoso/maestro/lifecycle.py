@@ -278,8 +278,18 @@ let((result)
     return None
 
 
-def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
-                           ) -> str | None:
+def _title_names(title: str, lib: str, cell: str, view: str) -> bool:
+    """True when an ADE window title names exactly this lib, cell and view.
+
+    Whole-token matching: a plain substring test lets ``TB`` match the window
+    of ``TB_extra``, and cannot tell two Maestro views of one cell apart.
+    """
+    tokens = title.replace("*", " ").split()
+    return lib in tokens and cell in tokens and view in tokens
+
+
+def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str,
+                           view: str = "maestro") -> str | None:
     """Return the GUI session string whose ADE window is for ``lib``/``cell``.
 
     Unlike :func:`find_open_session`, this does not require the maestro
@@ -290,7 +300,7 @@ def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
     Returns ``None`` if no matching window is found.
     """
     for w in _get_session_windows(client):
-        if lib in w["title"] and cell in w["title"]:
+        if _title_names(w["title"], lib, cell, view):
             return w["session"]
     return None
 
@@ -300,7 +310,7 @@ def _find_session_for_cell(client: VirtuosoClient, lib: str, cell: str
 # ---------------------------------------------------------------------------
 
 def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
-                     *, timeout: int = 60) -> str:
+                     *, timeout: int = 60, view: str = "maestro") -> str:
     """Open maestro in GUI mode, ready for simulation. Returns session string.
 
     Handles all edge cases safely:
@@ -326,7 +336,7 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
 
     for w in windows:
         title = w["title"]
-        is_target = (lib in title and cell in title)
+        is_target = _title_names(title, lib, cell, view)
 
         if is_target and w["mode"] == "editing":
             # Already editable for our cell — reuse
@@ -344,23 +354,23 @@ def open_gui_session(client: VirtuosoClient, lib: str, cell: str,
     # (no residual sessions), this opens Assembler by default.
     # Do NOT call maeOpenSetup afterwards — it creates a second
     # background session with its own lock, causing 8127 on next open.
-    logger.info("Opening GUI (editable): %s/%s/maestro", lib, cell)
+    logger.info("Opening GUI (editable): %s/%s/%s", lib, cell, view)
     r = client.execute_skill(
-        f'deOpenCellView("{lib}" "{cell}" "maestro" "maestro" nil "a")',
+        f'deOpenCellView("{lib}" "{cell}" "{view}" "maestro" nil "a")',
         timeout=timeout)
     if r.errors or not r.output or r.output.strip() in ("nil", ""):
-        raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/maestro: {r.errors}")
+        raise RuntimeError(f"deOpenCellView failed for {lib}/{cell}/{view}: {r.errors}")
 
     # Find the new session by matching the cell we just opened.  Do not
     # use find_open_session here — it filters on maeGetSetup, so a fresh
     # / empty maestro (no tests yet) is invisible to it and would surface
     # as a misleading "No session found after opening GUI".
-    session = _find_session_for_cell(client, lib, cell)
+    session = _find_session_for_cell(client, lib, cell, view)
     if not session:
         raise RuntimeError(
             f"No ADE window for {lib}/{cell} after deOpenCellView — "
             "the call returned but no matching window appeared; check "
-            f"that {cell!r} actually has a 'maestro' view in library {lib!r}")
+            f"that {cell!r} actually has a {view!r} view in library {lib!r}")
     logger.info("Opened GUI session: %s", session)
     return session
 

@@ -1,6 +1,6 @@
 ---
 name: virtuoso
-description: "Bridge to remote Cadence Virtuoso via Python API. TRIGGER when user mentions: Virtuoso, Maestro, ADE, CIW, SKILL, layout, schematic, cellview, OCEAN, or any Cadence EDA operation."
+description: "Bridge to remote Cadence Virtuoso via Python API. TRIGGER when user mentions: Virtuoso, Maestro, ADE, CIW, SKILL, layout, schematic, cellview, OCEAN, or any Cadence EDA operation. Also the entry point for this repo's other skills: standalone Spectre simulation, netlist curation, and design-space optimization."
 ---
 
 # Virtuoso Skill
@@ -13,6 +13,16 @@ description: "Bridge to remote Cadence Virtuoso via Python API. TRIGGER when use
 >
 > If the function is not documented in references or examples, it probably does not exist
 > or has a different name. Never guess parameter names -- verify first.
+
+## Other skills in this repo
+
+Read the one that matches the work. Links in this skill are relative to its real directory. If it was installed as a symlink, resolve the symlink first (`realpath`) before following them.
+
+| Work | Skill |
+| --- | --- |
+| Run Spectre from a netlist outside the GUI, parse PSF, run parallel jobs | [spectre](../spectre/SKILL.md) |
+| Clean up and curate a Spectre/SPICE netlist for review or reuse | [netlist](../netlist/SKILL.md) |
+| Optimize, size or sweep design parameters to meet specs (TuRBO, scipy) | [optimizer](../optimizer/SKILL.md) |
 
 ## Mental Model
 
